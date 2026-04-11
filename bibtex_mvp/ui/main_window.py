@@ -85,9 +85,9 @@ class MainWindow(QMainWindow):
         action_layout.addWidget(self.copy_btn)
 
         self.key_rule_combo = QComboBox()
-        self.key_rule_combo.addItem("作者姓 + 年份", BibKeyRule.AUTHOR_YEAR)
-        self.key_rule_combo.addItem("作者姓 + 年份 + 标题首词", BibKeyRule.AUTHOR_YEAR_TITLE)
-        self.key_rule_combo.addItem("标题首词 + 年份", BibKeyRule.TITLE_YEAR)
+        self.key_rule_combo.addItem("作者姓 + 年份（例：Zhou2007）", BibKeyRule.AUTHOR_YEAR)
+        self.key_rule_combo.addItem("作者姓 + 年份 + 标题首词（例：Zhou2007Functional）", BibKeyRule.AUTHOR_YEAR_TITLE)
+        self.key_rule_combo.addItem("标题首词 + 年份（例：Functional2007）", BibKeyRule.TITLE_YEAR)
         self.key_rule_combo.currentIndexChanged.connect(self.on_key_rule_changed)
         action_layout.addWidget(self.key_rule_combo)
         action_layout.addStretch(1)
@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
 
         self.confirm_all_btn.setEnabled(False)
         try:
+
             async def _finalize_all() -> list[ResolutionResult]:
                 tasks = [
                     self.resolver.finalize_candidate(
@@ -330,3 +331,4 @@ class MainWindow(QMainWindow):
             if bibtex.strip():
                 blocks.append(bibtex.strip())
         return "\n\n".join(blocks)
+

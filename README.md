@@ -1,33 +1,30 @@
-# 参考文献转 BibTeX 单条输入 MVP
+# 参考文献转 BibTeX（单条输入 MVP）
 
-## 功能范围
-- 单条输入，不做批量
-- 支持 DOI、标题、完整参考文献字符串
-- 检索源使用 Crossref 和 OpenAlex
-- 状态支持 成功、待确认、失败
-- 支持候选确认与 Google Scholar 辅助确认
-- 支持 BibTeX key 规则切换与复制
+当前版本：`v0.1.1`
 
-## 关键行为
-- DOI 输入直接查并生成 BibTeX
-- 标题输入先检索 DOI，再生成 BibTeX
-- 参考文献字符串先提取标题作者年份，再检索 DOI
-- 候选中存在完美匹配时直接成功  
-  完美匹配为 标题一致 年份一致 作者完整列表逐一一致且顺序一致
-- 只有一个高置信候选时直接成功
-- 多候选待确认或检索失败时，才显示 Google Scholar 按钮
+## 核心能力
+- 支持三种输入  
+DOI  
+文献标题  
+完整参考文献字符串
+- 支持 Crossref 和 OpenAlex 检索
+- 支持状态展示  
+成功  
+待确认  
+失败
+- 支持候选确认  
+确认当前候选  
+确认全部候选
+- 支持 Google Scholar 辅助确认
+- 支持 BibTeX key 规则切换和复制
 
-## 目录结构
-```text
-app.py
-requirements.txt
-bibtex_mvp/
-  application/
-  domain/
-  infra/
-  ui/
-  tests/
-```
+## BibTeX key 规则
+- 作者姓 + 年份  
+例 `Zhou2007`
+- 作者姓 + 年份 + 标题首词  
+例 `Zhou2007Functional`
+- 标题首词 + 年份  
+例 `Functional2007`
 
 ## 运行方式
 ```powershell
@@ -47,3 +44,4 @@ python -m pytest -q
 - 贡献规范见 `CONTRIBUTING.md`
 - 版本记录见 `CHANGELOG.md`
 - 发版流程见 `VERSIONING.md`
+
