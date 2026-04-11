@@ -42,3 +42,8 @@ cd D:\Develop\Codex\bib
 .\.venv\Scripts\activate
 python -m pytest -q
 ```
+
+## 版本管理
+- 贡献规范见 `CONTRIBUTING.md`
+- 版本记录见 `CHANGELOG.md`
+- 发版流程见 `VERSIONING.md`
