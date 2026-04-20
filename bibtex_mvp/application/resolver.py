@@ -80,6 +80,26 @@ class SingleEntryResolver:
             rows=cfg.max_rows,
         )
         if not candidates:
+            if kind == InputKind.REFERENCE and parsed_title and (parsed.authors or parsed.year):
+                fallback_candidate = CandidateRecord(
+                    title=parsed_title,
+                    authors=parsed.authors,
+                    year=parsed.year,
+                    doi=None,
+                    source="parsed",
+                    raw={"entrytype": "misc"},
+                )
+                return ResolutionResult(
+                    raw_input=raw_input,
+                    input_kind=kind,
+                    status=ResultStatus.PENDING,
+                    parsed_title=parsed_title,
+                    parsed_authors=parsed.authors,
+                    parsed_year=parsed.year,
+                    candidates=[fallback_candidate],
+                    scholar_url=build_scholar_search_url(parsed_title),
+                    message="自动检索失败，可确认解析结果（无 DOI）",
+                )
             return self._build_failed(
                 raw_input=raw_input,
                 input_kind=kind,
@@ -102,6 +122,13 @@ class SingleEntryResolver:
             return await self._success_from_candidate(raw_input, kind, parsed, auto_choice, key_rule)
 
         visible_candidates = [c for c in scored if c.score >= cfg.candidate_floor_threshold]
+
+        # For structured references, keep the best DOI candidate when score is lower than the normal floor.
+        if not visible_candidates and kind == InputKind.REFERENCE:
+            doi_candidates = [c for c in scored if c.doi]
+            if doi_candidates and doi_candidates[0].score >= 0.55:
+                visible_candidates = [doi_candidates[0]]
+
         if visible_candidates:
             return ResolutionResult(
                 raw_input=raw_input,
@@ -112,7 +139,28 @@ class SingleEntryResolver:
                 parsed_year=parsed.year,
                 candidates=visible_candidates,
                 scholar_url=build_scholar_search_url(parsed_title),
-                message="命中多个候选，请确认后生成 BibTeX",
+                message="命中候选结果，请确认后生成 BibTeX",
+            )
+
+        if kind == InputKind.REFERENCE and parsed_title and (parsed.authors or parsed.year):
+            fallback_candidate = CandidateRecord(
+                title=parsed_title,
+                authors=parsed.authors,
+                year=parsed.year,
+                doi=None,
+                source="parsed",
+                raw={"entrytype": "misc"},
+            )
+            return ResolutionResult(
+                raw_input=raw_input,
+                input_kind=kind,
+                status=ResultStatus.PENDING,
+                parsed_title=parsed_title,
+                parsed_authors=parsed.authors,
+                parsed_year=parsed.year,
+                candidates=[fallback_candidate],
+                scholar_url=build_scholar_search_url(parsed_title),
+                message="未检索到高置信 DOI，可确认解析结果（无 DOI）",
             )
 
         return self._build_failed(
@@ -224,7 +272,7 @@ class SingleEntryResolver:
         for item in openalex_items:
             merged.append(map_openalex_item(item))
 
-        return self._deduplicate([c for c in merged if c.title and c.doi])
+        return self._deduplicate([c for c in merged if c.title])
 
     def _deduplicate(self, candidates: list[CandidateRecord]) -> list[CandidateRecord]:
         by_key: dict[str, CandidateRecord] = {}
@@ -258,4 +306,3 @@ class SingleEntryResolver:
             scholar_url=build_scholar_search_url(query),
             message=message,
         )
-

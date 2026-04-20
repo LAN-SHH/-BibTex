@@ -16,3 +16,14 @@ def test_parse_reference_extracts_core_fields() -> None:
     assert parsed.authors
     assert parsed.authors[0].startswith("Zhou,")
 
+
+def test_parse_reference_vancouver_style_with_trailing_year() -> None:
+    raw = (
+        "Buckner RL, Andrews-Hanna JR, Schacter DL. "
+        "The brain's default network: anatomy, function, and relevance to disease. "
+        "Annals of the New York Academy of Sciences. 2008."
+    )
+    parsed = parse_reference(raw)
+    assert parsed.year == 2008
+    assert parsed.title == "The brain's default network: anatomy, function, and relevance to disease"
+    assert parsed.authors[:3] == ["Buckner, R.L.", "Andrews-Hanna, J.R.", "Schacter, D.L."]

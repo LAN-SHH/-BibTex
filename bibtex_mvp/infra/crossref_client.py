@@ -14,18 +14,24 @@ class CrossrefClient:
         if not title.strip():
             return []
         params = {"query.title": title, "rows": rows}
-        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-            response = await client.get("https://api.crossref.org/works", params=params)
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+                response = await client.get("https://api.crossref.org/works", params=params)
+                response.raise_for_status()
+        except httpx.HTTPError:
+            return []
         return ((response.json().get("message") or {}).get("items")) or []
 
     async def search_by_bibliographic(self, reference_text: str, rows: int = 20) -> list[dict]:
         if not reference_text.strip():
             return []
         params = {"query.bibliographic": reference_text, "rows": rows}
-        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-            response = await client.get("https://api.crossref.org/works", params=params)
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+                response = await client.get("https://api.crossref.org/works", params=params)
+                response.raise_for_status()
+        except httpx.HTTPError:
+            return []
         return ((response.json().get("message") or {}).get("items")) or []
 
     async def fetch_work_by_doi(self, doi: str) -> dict | None:
@@ -60,4 +66,3 @@ class CrossrefClient:
             if fallback.status_code < 400 and fallback.text.strip().startswith("@"):
                 return fallback.text.strip()
         return None
-

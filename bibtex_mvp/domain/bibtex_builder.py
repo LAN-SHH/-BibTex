@@ -8,16 +8,47 @@ from .bibtex_key import build_bib_key
 from .models import BibKeyRule, CandidateRecord
 
 
-def _replace_bibtex_key(raw_bibtex: str, key: str) -> str:
+def _sanitize_bibtex_for_parser(raw_bibtex: str) -> str:
+    # Crossref occasionally returns bare month tokens like month=june.
+    # Wrap bareword values so bibtexparser can parse and reformat consistently.
+    return re.sub(
+        r"=\s*([A-Za-z][A-Za-z0-9_-]*)\s*([,}])",
+        lambda m: f"={{{m.group(1)}}}{m.group(2)}",
+        raw_bibtex,
+    )
+
+
+def _try_parse_and_dump(raw_bibtex: str, key: str) -> str | None:
     try:
         db = bibtexparser.loads(raw_bibtex)
         if db.entries:
             db.entries[0]["ID"] = key
-            return bibtexparser.dumps(db)
+            return bibtexparser.dumps(db).strip()
     except Exception:
-        pass
+        return None
+    return None
 
-    return re.sub(r"(@\w+\{)([^,]+)", rf"\g<1>{key}", raw_bibtex, count=1)
+
+def _force_multiline_bibtex(raw_bibtex: str) -> str:
+    text = re.sub(r"\s+", " ", raw_bibtex.strip())
+    text = re.sub(r"(@\w+\{[^,]+,)\s*", r"\1\n  ", text)
+    text = re.sub(r",\s*([A-Za-z][A-Za-z0-9_-]*\s*=)", r",\n  \1", text)
+    text = re.sub(r"\s*}\s*$", "\n}", text)
+    return text
+
+
+def _replace_bibtex_key(raw_bibtex: str, key: str) -> str:
+    parsed = _try_parse_and_dump(raw_bibtex, key)
+    if parsed:
+        return parsed
+
+    sanitized = _sanitize_bibtex_for_parser(raw_bibtex)
+    parsed_sanitized = _try_parse_and_dump(sanitized, key)
+    if parsed_sanitized:
+        return parsed_sanitized
+
+    replaced_key = re.sub(r"(@\w+\{)([^,]+)", rf"\g<1>{key}", raw_bibtex, count=1)
+    return _force_multiline_bibtex(replaced_key)
 
 
 def _build_minimal_bibtex(candidate: CandidateRecord, key: str) -> str:
@@ -48,4 +79,3 @@ def build_bibtex_for_candidate(
         return _replace_bibtex_key(base_bibtex, key), base_bibtex
     minimal = _build_minimal_bibtex(candidate, key)
     return minimal, minimal
-

@@ -40,5 +40,19 @@ def choose_auto_success(
     high_conf = [candidate for candidate in candidates if candidate.score >= auto_threshold and candidate.doi]
     if len(high_conf) == 1:
         return high_conf[0]
-    return None
 
+    doi_candidates = [candidate for candidate in candidates if candidate.doi]
+    if len(doi_candidates) == 1:
+        only = doi_candidates[0]
+        year_ok = parsed_year is None or only.year is None or abs((only.year or 0) - parsed_year) <= 1
+        if year_ok and only.score >= 0.70:
+            return only
+
+    if doi_candidates:
+        ranked = sorted(doi_candidates, key=lambda c: c.score, reverse=True)
+        top = ranked[0]
+        second_score = ranked[1].score if len(ranked) > 1 else 0.0
+        year_ok = parsed_year is None or top.year is None or abs((top.year or 0) - parsed_year) <= 1
+        if year_ok and top.score >= 0.70 and (top.score - second_score) >= 0.10:
+            return top
+    return None

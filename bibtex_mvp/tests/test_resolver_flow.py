@@ -115,6 +115,43 @@ async def test_resolver_failed_when_no_candidates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolver_reference_pending_when_no_candidates() -> None:
+    resolver = SingleEntryResolver(
+        crossref_client=FakeCrossrefClient([]),
+        openalex_client=FakeOpenAlexClient(),
+        doi_service=FakeDoiService(),
+    )
+    raw = (
+        "Barch DM, Ceaser A. Cognition in schizophrenia: core psychological and neural mechanisms. "
+        "Trends in Cognitive Sciences. 2012."
+    )
+    result = await resolver.resolve(raw, BibKeyRule.AUTHOR_YEAR, ResolverConfig())
+    assert result.status == ResultStatus.PENDING
+    assert len(result.candidates) == 1
+    assert result.candidates[0].source == "parsed"
+
+
+@pytest.mark.asyncio
+async def test_resolver_reference_fallback_pending_without_doi() -> None:
+    resolver = SingleEntryResolver(
+        crossref_client=FakeCrossrefClient(
+            [_crossref_item("Unrelated title", [("Someone", "A.")], 2019, "10.1000/unrelated")]
+        ),
+        openalex_client=FakeOpenAlexClient(),
+        doi_service=FakeDoiService(),
+    )
+    raw = (
+        "American Psychiatric Association. (1994). "
+        "Diagnostic and statistical manual of mental disorders (4th ed.). Author."
+    )
+    result = await resolver.resolve(raw, BibKeyRule.AUTHOR_YEAR, ResolverConfig())
+    assert result.status == ResultStatus.PENDING
+    assert len(result.candidates) == 1
+    assert result.candidates[0].source == "parsed"
+    assert result.candidates[0].doi is None
+
+
+@pytest.mark.asyncio
 async def test_resolver_success_for_title_only_with_single_exact_candidate() -> None:
     resolver = SingleEntryResolver(
         crossref_client=FakeCrossrefClient(

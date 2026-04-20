@@ -72,3 +72,36 @@ def test_choose_auto_success_when_only_one_high_confidence() -> None:
     assert picked is not None
     assert picked.doi == "10.1000/a"
 
+
+def test_choose_auto_success_when_single_doi_candidate_has_reasonable_score() -> None:
+    candidates = [
+        _candidate("Close title", ["Li, X."], 2008, "", 0.88),
+        _candidate("The Brain's Default Network", ["Buckner, R.L."], 2008, "10.1196/annals.1440.011", 0.73),
+        _candidate("Noise title", ["Wang, H."], 2020, "", 0.91),
+    ]
+    picked = choose_auto_success(
+        candidates,
+        "The brain's default network: anatomy, function, and relevance to disease",
+        ["Buckner, R.L.", "Andrews-Hanna, J.R.", "Schacter, D.L."],
+        2008,
+        auto_threshold=0.92,
+    )
+    assert picked is not None
+    assert picked.doi == "10.1196/annals.1440.011"
+
+
+def test_choose_auto_success_when_top_doi_has_clear_margin() -> None:
+    candidates = [
+        _candidate("Top title", ["Buckner, R.L."], 2008, "10.1196/annals.1440.011", 0.734),
+        _candidate("Noise title one", ["Foo, A."], 2008, "10.1196/annals.1427.007", 0.5569),
+        _candidate("Noise title two", ["Bar, B."], 2008, "10.1196/annals.1427.010", 0.5547),
+    ]
+    picked = choose_auto_success(
+        candidates,
+        "The brain's default network: anatomy, function, and relevance to disease",
+        ["Buckner, R.L.", "Andrews-Hanna, J.R.", "Schacter, D.L."],
+        2008,
+        auto_threshold=0.92,
+    )
+    assert picked is not None
+    assert picked.doi == "10.1196/annals.1440.011"
