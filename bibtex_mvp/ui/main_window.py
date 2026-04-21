@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QPlainTextEdit,
     QVBoxLayout,
@@ -29,6 +31,31 @@ from .debug_panel import DebugPanel
 from .widgets import CandidateTable
 
 
+class AsyncTaskWorker(QObject):
+    progress = Signal(str, int, int)
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        task_factory: Callable[[Callable[[str, int, int], None]], Awaitable[object]],
+    ) -> None:
+        super().__init__()
+        self._task_factory = task_factory
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = asyncio.run(self._task_factory(self._emit_progress))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
+
+    def _emit_progress(self, message: str, step: int, total: int) -> None:
+        self.progress.emit(message, step, total)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -37,6 +64,10 @@ class MainWindow(QMainWindow):
         self.resolver = SingleEntryResolver()
         self.current_result: ResolutionResult | None = None
         self.bulk_confirmed_candidates: list[tuple[CandidateRecord, str | None]] = []
+        self._task_thread: QThread | None = None
+        self._task_worker: AsyncTaskWorker | None = None
+        self._task_error_title = "处理失败"
+        self._is_busy = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -91,6 +122,16 @@ class MainWindow(QMainWindow):
         self.key_rule_combo.currentIndexChanged.connect(self.on_key_rule_changed)
         action_layout.addWidget(self.key_rule_combo)
         action_layout.addStretch(1)
+
+        progress_layout = QHBoxLayout()
+        root_layout.addLayout(progress_layout)
+        self.progress_label = QLabel("就绪")
+        progress_layout.addWidget(self.progress_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        progress_layout.addWidget(self.progress_bar, 1)
 
         fields_group = QGroupBox("结果信息")
         fields_layout = QFormLayout()
@@ -147,24 +188,25 @@ class MainWindow(QMainWindow):
         if not raw:
             QMessageBox.warning(self, "输入为空", "请先输入 DOI、标题或完整参考文献字符串")
             return
+        key_rule = self.current_key_rule()
+        config = self.debug_panel.to_config()
 
-        self.resolve_btn.setEnabled(False)
-        try:
-            result = asyncio.run(
-                self.resolver.resolve(
-                    raw_input=raw,
-                    key_rule=self.current_key_rule(),
-                    config=self.debug_panel.to_config(),
-                )
+        async def _task(progress_cb: Callable[[str, int, int], None]) -> object:
+            result = await self.resolver.resolve(
+                raw_input=raw,
+                key_rule=key_rule,
+                config=config,
+                progress_cb=progress_cb,
             )
-        except Exception as exc:
-            QMessageBox.critical(self, "检索失败", f"{exc}")
-            self.resolve_btn.setEnabled(True)
-            return
-        self.resolve_btn.setEnabled(True)
-        self.current_result = result
-        self.bulk_confirmed_candidates = []
-        self.render_result(result)
+            progress_cb("处理完成", 1, 1)
+            return result
+
+        self._run_background_task(
+            task_factory=_task,
+            success_handler=self._on_resolve_success,
+            start_message="正在开始检索",
+            error_title="检索失败",
+        )
 
     def on_confirm_candidate_clicked(self) -> None:
         if not self.current_result:
@@ -173,23 +215,26 @@ class MainWindow(QMainWindow):
         if not candidate:
             QMessageBox.information(self, "未选中候选", "请先在候选列表中选中一条记录")
             return
-        self.confirm_btn.setEnabled(False)
-        try:
-            resolved = asyncio.run(
-                self.resolver.finalize_candidate(
-                    pending_result=self.current_result,
-                    candidate=candidate,
-                    key_rule=self.current_key_rule(),
-                )
+        pending_result = self.current_result
+        key_rule = self.current_key_rule()
+
+        async def _task(progress_cb: Callable[[str, int, int], None]) -> object:
+            progress_cb("正在确认候选并生成 BibTeX", 1, 3)
+            resolved = await self.resolver.finalize_candidate(
+                pending_result=pending_result,
+                candidate=candidate,
+                key_rule=key_rule,
             )
-        except Exception as exc:
-            QMessageBox.critical(self, "确认失败", f"{exc}")
-            self.confirm_btn.setEnabled(True)
-            return
-        self.confirm_btn.setEnabled(True)
-        self.current_result = resolved
-        self.bulk_confirmed_candidates = []
-        self.render_result(resolved)
+            progress_cb("正在刷新结果", 2, 3)
+            progress_cb("处理完成", 3, 3)
+            return resolved
+
+        self._run_background_task(
+            task_factory=_task,
+            success_handler=self._on_confirm_candidate_success,
+            start_message="正在确认候选",
+            error_title="确认失败",
+        )
 
     def on_confirm_all_candidates_clicked(self) -> None:
         if not self.current_result:
@@ -200,27 +245,52 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "没有候选", "当前没有可确认的候选结果")
             return
 
-        self.confirm_all_btn.setEnabled(False)
-        try:
+        pending_result = self.current_result
+        key_rule = self.current_key_rule()
+        all_candidates = list(pending_result.candidates)
 
-            async def _finalize_all() -> list[ResolutionResult]:
-                tasks = [
-                    self.resolver.finalize_candidate(
-                        pending_result=self.current_result,
-                        candidate=candidate,
-                        key_rule=self.current_key_rule(),
-                    )
-                    for candidate in self.current_result.candidates
-                ]
-                return await asyncio.gather(*tasks)
+        async def _task(progress_cb: Callable[[str, int, int], None]) -> object:
+            progress_cb(f"正在并行确认 {len(all_candidates)} 个候选", 1, 3)
+            tasks = [
+                self.resolver.finalize_candidate(
+                    pending_result=pending_result,
+                    candidate=candidate,
+                    key_rule=key_rule,
+                )
+                for candidate in all_candidates
+            ]
+            finalized_results = await asyncio.gather(*tasks)
+            progress_cb("正在汇总候选结果", 2, 3)
+            progress_cb("处理完成", 3, 3)
+            return finalized_results
 
-            finalized_results = asyncio.run(_finalize_all())
-        except Exception as exc:
-            QMessageBox.critical(self, "批量确认失败", f"{exc}")
-            self.confirm_all_btn.setEnabled(True)
+        self._run_background_task(
+            task_factory=_task,
+            success_handler=self._on_confirm_all_candidates_success,
+            start_message="正在确认全部候选",
+            error_title="批量确认失败",
+        )
+
+    def _on_resolve_success(self, payload: object) -> None:
+        if not isinstance(payload, ResolutionResult):
             return
+        self.current_result = payload
+        self.bulk_confirmed_candidates = []
+        self.render_result(payload)
 
-        self.confirm_all_btn.setEnabled(True)
+    def _on_confirm_candidate_success(self, payload: object) -> None:
+        if not isinstance(payload, ResolutionResult):
+            return
+        self.current_result = payload
+        self.bulk_confirmed_candidates = []
+        self.render_result(payload)
+
+    def _on_confirm_all_candidates_success(self, payload: object) -> None:
+        if not isinstance(payload, list):
+            return
+        if not self.current_result:
+            return
+        finalized_results = [r for r in payload if isinstance(r, ResolutionResult)]
         confirmed: list[tuple[CandidateRecord, str | None]] = []
         for result in finalized_results:
             if result.selected is None:
@@ -241,6 +311,94 @@ class MainWindow(QMainWindow):
         self.current_result.message = f"已确认全部候选，共 {len(confirmed)} 条"
         self.render_result(self.current_result)
 
+    def _run_background_task(
+        self,
+        task_factory: Callable[[Callable[[str, int, int], None]], Awaitable[object]],
+        success_handler: Callable[[object], None],
+        start_message: str,
+        error_title: str,
+    ) -> None:
+        if self._task_thread is not None:
+            QMessageBox.information(self, "任务进行中", "请等待当前任务完成")
+            return
+
+        self._task_error_title = error_title
+        self._set_busy_ui(True)
+        self._update_progress(start_message, 0, 0)
+
+        thread = QThread(self)
+        worker = AsyncTaskWorker(task_factory)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_background_task_progress)
+        worker.finished.connect(success_handler)
+        worker.finished.connect(self._on_background_task_finished)
+        worker.failed.connect(self._on_background_task_failed)
+        worker.failed.connect(self._on_background_task_finished)
+
+        self._task_thread = thread
+        self._task_worker = worker
+        thread.start()
+
+    def _on_background_task_progress(self, message: str, step: int, total: int) -> None:
+        self._update_progress(message, step, total)
+
+    def _on_background_task_failed(self, message: str) -> None:
+        self._update_progress("处理失败", 0, 1)
+        QMessageBox.critical(self, self._task_error_title, message)
+
+    def _on_background_task_finished(self, _payload: object) -> None:
+        self._set_busy_ui(False)
+        self._cleanup_background_task()
+
+    def _cleanup_background_task(self) -> None:
+        worker = self._task_worker
+        thread = self._task_thread
+        self._task_worker = None
+        self._task_thread = None
+
+        if thread is not None:
+            thread.quit()
+            thread.wait()
+            thread.deleteLater()
+        if worker is not None:
+            worker.deleteLater()
+
+    def _set_busy_ui(self, is_busy: bool) -> None:
+        self._is_busy = is_busy
+        self.input_edit.setReadOnly(is_busy)
+        self.resolve_btn.setEnabled(not is_busy)
+        self.key_rule_combo.setEnabled(not is_busy)
+        self.debug_panel.setEnabled(not is_busy)
+        self.candidate_table.setEnabled(not is_busy)
+
+        if is_busy:
+            self.confirm_btn.setEnabled(False)
+            self.confirm_all_btn.setEnabled(False)
+            self.candidate_scholar_btn.setEnabled(False)
+            self.scholar_btn.setEnabled(False)
+            self.copy_btn.setEnabled(False)
+            return
+
+        if self.current_result:
+            self.render_result(self.current_result)
+        else:
+            self.confirm_btn.setEnabled(False)
+            self.confirm_all_btn.setEnabled(False)
+            self.candidate_scholar_btn.setEnabled(False)
+            self.scholar_btn.setEnabled(False)
+            self.copy_btn.setEnabled(False)
+
+    def _update_progress(self, message: str, step: int, total: int) -> None:
+        self.progress_label.setText(message)
+        if total <= 0:
+            self.progress_bar.setRange(0, 0)
+            return
+        ratio = max(0.0, min(1.0, step / total))
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(int(ratio * 100))
+
     def on_open_candidate_scholar_clicked(self) -> None:
         candidate = self.candidate_table.selected_candidate()
         if not candidate:
@@ -257,11 +415,13 @@ class MainWindow(QMainWindow):
     def on_candidate_selection_changed(self) -> None:
         candidate = self.candidate_table.selected_candidate()
         can_open = (
-            self.current_result is not None
+            not self._is_busy
+            and self.current_result is not None
             and self.current_result.status == ResultStatus.PENDING
             and candidate is not None
         )
         self.candidate_scholar_btn.setEnabled(can_open)
+        self.confirm_btn.setEnabled(can_open)
 
     def on_scholar_clicked(self) -> None:
         if self.current_result and self.current_result.scholar_url:
@@ -307,11 +467,13 @@ class MainWindow(QMainWindow):
         self.confirm_btn.setVisible(show_candidate_controls)
         self.confirm_all_btn.setVisible(show_candidate_controls)
         self.candidate_scholar_btn.setVisible(show_candidate_controls)
+        self.confirm_all_btn.setEnabled(show_candidate_controls and not self._is_busy)
         self.on_candidate_selection_changed()
 
         show_scholar = result.status in {ResultStatus.PENDING, ResultStatus.FAILED}
         self.scholar_btn.setVisible(show_scholar and bool(result.scholar_url))
-        self.copy_btn.setEnabled(result.status == ResultStatus.SUCCESS and bool(result.bibtex))
+        self.scholar_btn.setEnabled(show_scholar and bool(result.scholar_url) and not self._is_busy)
+        self.copy_btn.setEnabled(result.status == ResultStatus.SUCCESS and bool(result.bibtex) and not self._is_busy)
 
     def _open_candidate_scholar(self, candidate: CandidateRecord) -> None:
         query_parts: list[str] = [candidate.title]
@@ -331,4 +493,3 @@ class MainWindow(QMainWindow):
             if bibtex.strip():
                 blocks.append(bibtex.strip())
         return "\n\n".join(blocks)
-

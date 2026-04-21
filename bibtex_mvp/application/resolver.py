@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Callable
 
 from bibtex_mvp.domain.bibtex_builder import build_bibtex_for_candidate
 from bibtex_mvp.domain.input_classifier import classify_input, extract_doi, normalize_text
@@ -40,12 +41,16 @@ class SingleEntryResolver:
         raw_input: str,
         key_rule: BibKeyRule,
         config: ResolverConfig | None = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> ResolutionResult:
+        total_steps = 6
         cfg = config or ResolverConfig()
         cleaned = normalize_text(raw_input)
+        self._report_progress(progress_cb, "正在识别输入类型", 1, total_steps)
         kind = classify_input(cleaned)
 
         if kind == InputKind.DOI:
+            self._report_progress(progress_cb, "正在解析 DOI", 2, total_steps)
             doi = extract_doi(cleaned)
             if not doi:
                 return self._build_failed(raw_input, kind, "DOI 识别失败")
@@ -55,9 +60,11 @@ class SingleEntryResolver:
                 doi=doi,
                 key_rule=key_rule,
                 parsed=ParsedReference(raw_input=raw_input, doi=doi),
+                progress_cb=progress_cb,
             )
 
         if kind == InputKind.REFERENCE:
+            self._report_progress(progress_cb, "正在解析参考文献信息", 2, total_steps)
             parsed = parse_reference(cleaned)
             parsed.raw_input = raw_input
             if parsed.doi:
@@ -67,17 +74,20 @@ class SingleEntryResolver:
                     doi=parsed.doi,
                     key_rule=key_rule,
                     parsed=parsed,
+                    progress_cb=progress_cb,
                 )
             parsed_title = parsed.title or cleaned
         else:
             parsed = ParsedReference(raw_input=raw_input, title=cleaned)
             parsed_title = cleaned
 
+        self._report_progress(progress_cb, "正在检索 Crossref 和 OpenAlex", 3, total_steps)
         candidates = await self._search_candidates(
             raw_input=raw_input,
             input_kind=kind,
             query_text=parsed_title,
             rows=cfg.max_rows,
+            timeout_sec=cfg.search_timeout_sec,
         )
         if not candidates:
             if kind == InputKind.REFERENCE and parsed_title and (parsed.authors or parsed.year):
@@ -108,6 +118,7 @@ class SingleEntryResolver:
                 scholar_query=parsed_title,
             )
 
+        self._report_progress(progress_cb, "正在计算候选匹配分数", 4, total_steps)
         scored = [score_candidate(c, parsed_title, parsed.authors, parsed.year) for c in candidates]
         scored.sort(key=lambda c: c.score, reverse=True)
 
@@ -119,6 +130,7 @@ class SingleEntryResolver:
             auto_threshold=cfg.auto_accept_threshold,
         )
         if auto_choice:
+            self._report_progress(progress_cb, "正在生成 BibTeX", 5, total_steps)
             return await self._success_from_candidate(raw_input, kind, parsed, auto_choice, key_rule)
 
         visible_candidates = [c for c in scored if c.score >= cfg.candidate_floor_threshold]
@@ -163,6 +175,7 @@ class SingleEntryResolver:
                 message="未检索到高置信 DOI，可确认解析结果（无 DOI）",
             )
 
+        self._report_progress(progress_cb, "未找到可信候选", 6, total_steps)
         return self._build_failed(
             raw_input=raw_input,
             input_kind=kind,
@@ -207,7 +220,9 @@ class SingleEntryResolver:
         doi: str,
         key_rule: BibKeyRule,
         parsed: ParsedReference,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> ResolutionResult:
+        self._report_progress(progress_cb, "正在通过 DOI 获取文献信息", 3, 6)
         candidate = await self.doi_service.fetch_candidate_by_doi(doi)
         if not candidate:
             return self._build_failed(
@@ -217,7 +232,14 @@ class SingleEntryResolver:
                 parsed=parsed,
                 scholar_query=parsed.title or doi,
             )
-        return await self._success_from_candidate(raw_input, input_kind, parsed, candidate, key_rule)
+        return await self._success_from_candidate(
+            raw_input,
+            input_kind,
+            parsed,
+            candidate,
+            key_rule,
+            progress_cb=progress_cb,
+        )
 
     async def _success_from_candidate(
         self,
@@ -226,11 +248,14 @@ class SingleEntryResolver:
         parsed: ParsedReference,
         candidate: CandidateRecord,
         key_rule: BibKeyRule,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> ResolutionResult:
+        self._report_progress(progress_cb, "正在生成 BibTeX", 5, 6)
         base_bibtex = None
         if candidate.doi:
             base_bibtex = await self.doi_service.fetch_bibtex_by_doi(candidate.doi)
         bibtex, stored_base = build_bibtex_for_candidate(candidate, key_rule, base_bibtex)
+        self._report_progress(progress_cb, "处理完成", 6, 6)
 
         return ResolutionResult(
             raw_input=raw_input,
@@ -246,18 +271,33 @@ class SingleEntryResolver:
             message="BibTeX 生成成功",
         )
 
+    @staticmethod
+    def _report_progress(
+        progress_cb: Callable[[str, int, int], None] | None,
+        message: str,
+        step: int,
+        total: int,
+    ) -> None:
+        if not progress_cb:
+            return
+        progress_cb(message, step, total)
+
     async def _search_candidates(
         self,
         raw_input: str,
         input_kind: InputKind,
         query_text: str,
         rows: int,
+        timeout_sec: float,
     ) -> list[CandidateRecord]:
         bibliographic_query = raw_input if input_kind == InputKind.REFERENCE else query_text
         tasks = [
-            self.crossref_client.search_by_title(query_text, rows=rows),
-            self.openalex_client.search_works(query_text, per_page=rows),
-            self.crossref_client.search_by_bibliographic(bibliographic_query, rows=rows),
+            asyncio.wait_for(self.crossref_client.search_by_title(query_text, rows=rows), timeout=timeout_sec),
+            asyncio.wait_for(self.openalex_client.search_works(query_text, per_page=rows), timeout=timeout_sec),
+            asyncio.wait_for(
+                self.crossref_client.search_by_bibliographic(bibliographic_query, rows=rows),
+                timeout=timeout_sec,
+            ),
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         crossref_title_items = results[0] if isinstance(results[0], list) else []

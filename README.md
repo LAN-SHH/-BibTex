@@ -8,6 +8,11 @@
   文献标题  
   完整参考文献字符串
 - 支持 Crossref 和 OpenAlex 双源检索
+- 支持检索进度条和阶段提示
+- 支持后台检索与后台确认  
+  检索和确认时界面不再无响应
+- 支持单路检索超时保护  
+  某个数据源超时不会拖慢整体返回
 - 支持三种状态  
   成功  
   待确认  
@@ -18,6 +23,11 @@
 - 支持 Google Scholar 辅助确认
 - 支持 BibTeX 生成与复制
 - 支持 BibTeX key 规则切换
+
+## 当前开发改动（未发布）
+- 新增检索进度条和阶段文案
+- 检索与候选确认改为后台线程执行
+- 新增检索超时配置 `search_timeout_sec`，默认 `6.0` 秒
 
 ## BibTeX key 规则
 - 作者姓 + 年份  
@@ -59,4 +69,3 @@ python -m pytest -q
 - 贡献规范见 `CONTRIBUTING.md`
 - 版本记录见 `CHANGELOG.md`
 - 发版流程见 `VERSIONING.md`
-
