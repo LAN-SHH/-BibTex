@@ -11,6 +11,10 @@ AUTHOR_COMMA_INITIAL_PATTERN = re.compile(r"([A-Za-zÀ-ÖØ-öø-ÿ'`-]+,\s*(?:[
 VANCOUVER_AUTHOR_PATTERN = re.compile(
     r"^[A-Za-zÀ-ÖØ-öø-ÿ'`-]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ'`-]+)*\s+(?:[A-Z]\.?){1,5}$"
 )
+CN_JOL_PATTERN = re.compile(
+    r"^(?:\[\d+\]\s*)?(?P<authors>.+?)\.\s*(?P<title>.+?)\[(?:J|J/OL|J\\?/OL)\]\.\s*(?P<rest>.+)$",
+    re.IGNORECASE,
+)
 
 
 def _extract_year(text: str) -> tuple[int | None, tuple[int, int] | None]:
@@ -125,9 +129,43 @@ def _extract_title_and_authors_for_trailing_year(
     return title, _extract_authors(author_segment)
 
 
+def _parse_cn_jol_reference(text: str) -> tuple[str | None, list[str], int | None] | None:
+    match = CN_JOL_PATTERN.match(text)
+    if not match:
+        return None
+    authors_raw = normalize_text(match.group("authors"))
+    title_raw = normalize_text(match.group("title"))
+    rest_raw = normalize_text(match.group("rest"))
+    if not title_raw:
+        return None
+
+    authors: list[str] = []
+    for chunk in authors_raw.replace("，", ",").split(","):
+        part = normalize_text(chunk).strip(",.;")
+        if not part or part in {"等", "et al", "et al."}:
+            continue
+        authors.append(part)
+
+    year_match = YEAR_PATTERN.search(rest_raw)
+    year = int(year_match.group(0)) if year_match else None
+    return title_raw, authors, year
+
+
 def parse_reference(raw_input: str) -> ParsedReference:
     text = normalize_text(raw_input)
     doi = extract_doi(text)
+
+    cn_jol_parsed = _parse_cn_jol_reference(text)
+    if cn_jol_parsed is not None:
+        title, authors, year = cn_jol_parsed
+        return ParsedReference(
+            raw_input=raw_input,
+            title=title,
+            authors=authors,
+            year=year,
+            doi=doi,
+        )
+
     year, year_span = _extract_year(text)
 
     authors: list[str] = []

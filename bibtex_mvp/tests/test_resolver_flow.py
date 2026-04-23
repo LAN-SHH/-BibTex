@@ -1,8 +1,10 @@
+import asyncio
+
 import pytest
 
-from bibtex_mvp.application.orchestrator import ResolverConfig
+from bibtex_mvp.application.orchestrator import BatchCancelToken, ResolverConfig
 from bibtex_mvp.application.resolver import SingleEntryResolver
-from bibtex_mvp.domain.models import BibKeyRule, CandidateRecord, ResultStatus
+from bibtex_mvp.domain.models import BatchProgressEvent, BatchProgressStage, BibKeyRule, CandidateRecord, ResultStatus
 
 
 class FakeCrossrefClient:
@@ -176,3 +178,139 @@ async def test_resolver_success_for_title_only_with_single_exact_candidate() -> 
     assert result.status == ResultStatus.SUCCESS
     assert result.selected is not None
     assert result.selected.doi == "10.1016/j.neulet.2007.02.081"
+
+
+@pytest.mark.asyncio
+async def test_resolve_batch_keeps_order_and_continues_after_failure() -> None:
+    class BranchCrossrefClient(FakeCrossrefClient):
+        async def search_by_title(self, title: str, rows: int = 20) -> list[dict]:
+            if "missing" in title.lower():
+                return []
+            return [_crossref_item(title, [("Li", "X.")], 2020, f"10.1000/{title.lower().replace(' ', '')}")]
+
+        async def search_by_bibliographic(self, reference_text: str, rows: int = 20) -> list[dict]:
+            return []
+
+    resolver = SingleEntryResolver(
+        crossref_client=BranchCrossrefClient([]),
+        openalex_client=FakeOpenAlexClient(),
+        doi_service=FakeDoiService(),
+    )
+    events: list[BatchProgressEvent] = []
+
+    results = await resolver.resolve_batch(
+        raw_inputs=["Good First", "Missing One", "Good Third"],
+        key_rule=BibKeyRule.AUTHOR_YEAR,
+        config=ResolverConfig(),
+        progress_cb=lambda event: events.append(event),
+    )
+
+    assert [r.status for r in results] == [ResultStatus.SUCCESS, ResultStatus.FAILED, ResultStatus.SUCCESS]
+    assert [r.raw_input for r in results] == ["Good First", "Missing One", "Good Third"]
+    assert any(event.stage == BatchProgressStage.ITEM_FAILED and event.index == 2 for event in events)
+    assert any(event.stage == BatchProgressStage.ITEM_DONE and event.index == 1 for event in events)
+    assert any(event.stage == BatchProgressStage.ITEM_DONE and event.index == 3 for event in events)
+
+
+@pytest.mark.asyncio
+async def test_resolve_batch_cancel_marks_cancelled() -> None:
+    class SlowCrossrefClient(FakeCrossrefClient):
+        async def search_by_title(self, title: str, rows: int = 20) -> list[dict]:
+            await asyncio.sleep(0.5)
+            return [_crossref_item(title, [("Li", "X.")], 2020, f"10.1000/{title.lower().replace(' ', '')}")]
+
+        async def search_by_bibliographic(self, reference_text: str, rows: int = 20) -> list[dict]:
+            await asyncio.sleep(0.5)
+            return []
+
+    resolver = SingleEntryResolver(
+        crossref_client=SlowCrossrefClient([]),
+        openalex_client=FakeOpenAlexClient(),
+        doi_service=FakeDoiService(),
+    )
+    token = BatchCancelToken()
+    events: list[BatchProgressEvent] = []
+
+    task = asyncio.create_task(
+        resolver.resolve_batch(
+            raw_inputs=["A", "B", "C"],
+            key_rule=BibKeyRule.AUTHOR_YEAR,
+            config=ResolverConfig(batch_concurrency=2),
+            progress_cb=lambda event: events.append(event),
+            cancel_token=token,
+        )
+    )
+    await asyncio.sleep(0.1)
+    token.cancel()
+    results = await task
+
+    assert len(results) == 3
+    assert any(r.status == ResultStatus.CANCELLED for r in results)
+    assert any(event.stage == BatchProgressStage.ITEM_CANCELLED for event in events)
+
+
+def test_rebuild_result_bibtex_without_selected_still_updates_key() -> None:
+    resolver = SingleEntryResolver(
+        crossref_client=FakeCrossrefClient([]),
+        openalex_client=FakeOpenAlexClient(),
+        doi_service=FakeDoiService(),
+    )
+    from bibtex_mvp.domain.models import InputKind, ResolutionResult
+
+    base = (
+        "@article{OldKey, title={Dynamic reconfiguration of human brain networks during learning}, "
+        "author={Bassett, D.S. and Wymbs, N.F.}, year={2011}, doi={10.1073/pnas.1018985108}}"
+    )
+    result = ResolutionResult(
+        raw_input="x",
+        input_kind=InputKind.DOI,
+        status=ResultStatus.SUCCESS,
+        selected=None,
+        parsed_title=None,
+        parsed_authors=[],
+        parsed_year=None,
+        doi="10.1073/pnas.1018985108",
+        bibtex=base,
+        bibtex_base=base,
+    )
+
+    updated = resolver.rebuild_result_bibtex(result, BibKeyRule.TITLE_YEAR)
+    assert updated.bibtex is not None
+    assert "@article{Dynamic2011" in updated.bibtex
+
+
+def test_rebuild_result_bibtex_prefers_bibtex_over_selected() -> None:
+    resolver = SingleEntryResolver(
+        crossref_client=FakeCrossrefClient([]),
+        openalex_client=FakeOpenAlexClient(),
+        doi_service=FakeDoiService(),
+    )
+    from bibtex_mvp.domain.models import InputKind, ResolutionResult
+
+    base = (
+        "@article{OldKey, title={Dynamic reconfiguration of human brain networks during learning}, "
+        "author={Bassett, D.S. and Wymbs, N.F.}, year={2011}, doi={10.1073/pnas.1018985108}}"
+    )
+    wrong_selected = CandidateRecord(
+        title="Completely Wrong Title",
+        authors=["Wrong, A."],
+        year=1999,
+        doi="10.0000/wrong",
+        source="crossref",
+    )
+    result = ResolutionResult(
+        raw_input="x",
+        input_kind=InputKind.DOI,
+        status=ResultStatus.SUCCESS,
+        selected=wrong_selected,
+        parsed_title="Wrong Parsed Title",
+        parsed_authors=["Wrong, P."],
+        parsed_year=2001,
+        doi="10.0000/wrong",
+        bibtex=base,
+        bibtex_base=base,
+    )
+
+    updated = resolver.rebuild_result_bibtex(result, BibKeyRule.TITLE_YEAR)
+    assert updated.bibtex is not None
+    assert "@article{Dynamic2011" in updated.bibtex

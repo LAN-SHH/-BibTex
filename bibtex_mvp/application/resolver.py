@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
+import bibtexparser
+
 from bibtex_mvp.domain.bibtex_builder import build_bibtex_for_candidate
 from bibtex_mvp.domain.input_classifier import classify_input, extract_doi, normalize_text
 from bibtex_mvp.domain.matcher import choose_auto_success
 from bibtex_mvp.domain.models import (
+    BatchProgressEvent,
+    BatchProgressStage,
     BibKeyRule,
     CandidateRecord,
     InputKind,
@@ -22,7 +26,7 @@ from bibtex_mvp.infra.mapper import map_crossref_item, map_openalex_item
 from bibtex_mvp.infra.openalex_client import OpenAlexClient
 from bibtex_mvp.infra.scholar_url import build_scholar_search_url
 
-from .orchestrator import ResolverConfig
+from .orchestrator import BatchCancelToken, ResolverConfig
 
 
 class SingleEntryResolver:
@@ -54,12 +58,15 @@ class SingleEntryResolver:
             doi = extract_doi(cleaned)
             if not doi:
                 return self._build_failed(raw_input, kind, "DOI 识别失败")
+            parsed = parse_reference(cleaned)
+            parsed.raw_input = raw_input
+            parsed.doi = doi
             return await self._resolve_doi_flow(
                 raw_input=raw_input,
                 input_kind=kind,
                 doi=doi,
                 key_rule=key_rule,
-                parsed=ParsedReference(raw_input=raw_input, doi=doi),
+                parsed=parsed,
                 progress_cb=progress_cb,
             )
 
@@ -184,6 +191,175 @@ class SingleEntryResolver:
             scholar_query=parsed_title,
         )
 
+    async def resolve_batch(
+        self,
+        raw_inputs: list[str],
+        key_rule: BibKeyRule,
+        config: ResolverConfig | None = None,
+        progress_cb: Callable[[BatchProgressEvent], None] | None = None,
+        cancel_token: BatchCancelToken | None = None,
+    ) -> list[ResolutionResult]:
+        cfg = config or ResolverConfig()
+        total = len(raw_inputs)
+        if total == 0:
+            return []
+
+        self._report_batch_progress(
+            progress_cb,
+            BatchProgressEvent(
+                index=0,
+                total=total,
+                stage=BatchProgressStage.BATCH_START,
+                message=f"开始批量处理，共 {total} 条",
+            ),
+        )
+
+        semaphore = asyncio.Semaphore(max(1, cfg.batch_concurrency))
+        results: list[ResolutionResult | None] = [None] * total
+
+        async def _run_item(index: int, raw_input: str) -> tuple[int, ResolutionResult]:
+            try:
+                if cancel_token and cancel_token.is_cancelled():
+                    cancelled = self._build_cancelled(raw_input)
+                    self._report_batch_progress(
+                        progress_cb,
+                        BatchProgressEvent(
+                            index=index + 1,
+                            total=total,
+                            stage=BatchProgressStage.ITEM_CANCELLED,
+                            message=f"第 {index + 1} 条已取消",
+                            result=cancelled,
+                        ),
+                    )
+                    return index, cancelled
+
+                async with semaphore:
+                    if cancel_token and cancel_token.is_cancelled():
+                        cancelled = self._build_cancelled(raw_input)
+                        self._report_batch_progress(
+                            progress_cb,
+                            BatchProgressEvent(
+                                index=index + 1,
+                                total=total,
+                                stage=BatchProgressStage.ITEM_CANCELLED,
+                                message=f"第 {index + 1} 条已取消",
+                                result=cancelled,
+                            ),
+                        )
+                        return index, cancelled
+
+                    self._report_batch_progress(
+                        progress_cb,
+                        BatchProgressEvent(
+                            index=index + 1,
+                            total=total,
+                            stage=BatchProgressStage.ITEM_START,
+                            message=f"正在处理第 {index + 1}/{total} 条",
+                        ),
+                    )
+
+                    try:
+                        resolved = await self.resolve(raw_input, key_rule=key_rule, config=cfg, progress_cb=None)
+                    except asyncio.CancelledError:
+                        cancelled = self._build_cancelled(raw_input)
+                        self._report_batch_progress(
+                            progress_cb,
+                            BatchProgressEvent(
+                                index=index + 1,
+                                total=total,
+                                stage=BatchProgressStage.ITEM_CANCELLED,
+                                message=f"第 {index + 1} 条已取消",
+                                result=cancelled,
+                            ),
+                        )
+                        return index, cancelled
+                    except Exception as exc:
+                        detail = str(exc).strip() or exc.__class__.__name__
+                        parsed = parse_reference(normalize_text(raw_input))
+                        parsed.raw_input = raw_input
+                        failed = self._build_failed(
+                            raw_input=raw_input,
+                            input_kind=classify_input(normalize_text(raw_input)),
+                            message=f"批量检索异常: {detail}",
+                            parsed=parsed,
+                            scholar_query=raw_input,
+                        )
+                        self._report_batch_progress(
+                            progress_cb,
+                            BatchProgressEvent(
+                                index=index + 1,
+                                total=total,
+                                stage=BatchProgressStage.ITEM_FAILED,
+                                message=f"第 {index + 1} 条失败",
+                                result=failed,
+                            ),
+                        )
+                        return index, failed
+
+                    if resolved.status == ResultStatus.FAILED:
+                        stage = BatchProgressStage.ITEM_FAILED
+                        message = f"第 {index + 1} 条失败"
+                    elif resolved.status == ResultStatus.CANCELLED:
+                        stage = BatchProgressStage.ITEM_CANCELLED
+                        message = f"第 {index + 1} 条已取消"
+                    else:
+                        stage = BatchProgressStage.ITEM_DONE
+                        message = f"第 {index + 1} 条完成"
+                    self._report_batch_progress(
+                        progress_cb,
+                        BatchProgressEvent(
+                            index=index + 1,
+                            total=total,
+                            stage=stage,
+                            message=message,
+                            result=resolved,
+                        ),
+                    )
+                    return index, resolved
+            except asyncio.CancelledError:
+                cancelled = self._build_cancelled(raw_input)
+                self._report_batch_progress(
+                    progress_cb,
+                    BatchProgressEvent(
+                        index=index + 1,
+                        total=total,
+                        stage=BatchProgressStage.ITEM_CANCELLED,
+                        message=f"第 {index + 1} 条已取消",
+                        result=cancelled,
+                    ),
+                )
+                return index, cancelled
+
+        tasks = [asyncio.create_task(_run_item(idx, raw)) for idx, raw in enumerate(raw_inputs)]
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, timeout=0.1, return_when=asyncio.FIRST_COMPLETED)
+            if cancel_token and cancel_token.is_cancelled():
+                for task in pending:
+                    task.cancel()
+            for task in done:
+                try:
+                    index, result = task.result()
+                except Exception:
+                    continue
+                results[index] = result
+
+        for idx, result in enumerate(results):
+            if result is None:
+                results[idx] = self._build_cancelled(raw_inputs[idx])
+
+        final_results = [result for result in results if result is not None]
+        self._report_batch_progress(
+            progress_cb,
+            BatchProgressEvent(
+                index=total,
+                total=total,
+                stage=BatchProgressStage.BATCH_DONE,
+                message="批量处理完成",
+            ),
+        )
+        return final_results
+
     async def finalize_candidate(
         self,
         pending_result: ResolutionResult,
@@ -206,9 +382,11 @@ class SingleEntryResolver:
         )
 
     def rebuild_result_bibtex(self, result: ResolutionResult, key_rule: BibKeyRule) -> ResolutionResult:
-        if not result.selected:
+        candidate = self._candidate_from_bibtex(result) or result.selected or self._candidate_from_result(result)
+        if not candidate:
             return result
-        bibtex, base_bibtex = build_bibtex_for_candidate(result.selected, key_rule, result.bibtex_base)
+        source_bibtex = result.bibtex_base or result.bibtex
+        bibtex, base_bibtex = build_bibtex_for_candidate(candidate, key_rule, source_bibtex)
         result.bibtex = bibtex
         result.bibtex_base = base_bibtex
         return result
@@ -224,6 +402,8 @@ class SingleEntryResolver:
     ) -> ResolutionResult:
         self._report_progress(progress_cb, "正在通过 DOI 获取文献信息", 3, 6)
         candidate = await self.doi_service.fetch_candidate_by_doi(doi)
+        if not candidate:
+            candidate = await self._fallback_search_by_doi(doi)
         if not candidate:
             return self._build_failed(
                 raw_input=raw_input,
@@ -282,6 +462,38 @@ class SingleEntryResolver:
             return
         progress_cb(message, step, total)
 
+    @staticmethod
+    def _report_batch_progress(
+        progress_cb: Callable[[BatchProgressEvent], None] | None,
+        event: BatchProgressEvent,
+    ) -> None:
+        if not progress_cb:
+            return
+        progress_cb(event)
+
+    async def _fallback_search_by_doi(self, doi: str) -> CandidateRecord | None:
+        doi_lower = (doi or "").lower()
+        if not doi_lower:
+            return None
+        try:
+            crossref_items = await self.crossref_client.search_by_bibliographic(doi_lower, rows=5)
+        except Exception:
+            crossref_items = []
+        for item in crossref_items:
+            candidate = map_crossref_item(item)
+            if candidate.doi and candidate.doi.lower() == doi_lower:
+                return candidate
+
+        try:
+            openalex_items = await self.openalex_client.search_works(doi_lower, per_page=5)
+        except Exception:
+            openalex_items = []
+        for item in openalex_items:
+            candidate = map_openalex_item(item)
+            if candidate.doi and candidate.doi.lower() == doi_lower:
+                return candidate
+        return None
+
     async def _search_candidates(
         self,
         raw_input: str,
@@ -326,6 +538,68 @@ class SingleEntryResolver:
                 by_key[key] = candidate
         return list(by_key.values())
 
+    def _candidate_from_result(self, result: ResolutionResult) -> CandidateRecord | None:
+        title = result.parsed_title or ""
+        authors = list(result.parsed_authors)
+        year = result.parsed_year
+        doi = result.doi
+        if not title and not authors and year is None and not doi:
+            return None
+        return CandidateRecord(
+            title=title,
+            authors=authors,
+            year=year,
+            doi=doi,
+            source="parsed",
+            raw={"entrytype": "article"},
+        )
+
+    def _candidate_from_bibtex(self, result: ResolutionResult) -> CandidateRecord | None:
+        title = ""
+        authors: list[str] = []
+        year: int | None = None
+        doi: str | None = None
+        raw_meta: dict[str, str] = {"entrytype": "article"}
+
+        source_bib = result.bibtex_base or result.bibtex or ""
+        if source_bib.strip():
+            try:
+                db = bibtexparser.loads(source_bib)
+                if db.entries:
+                    entry = db.entries[0]
+                    title = str(entry.get("title", "")).strip()
+                    raw_authors = str(entry.get("author", "")).strip()
+                    authors = [a.strip() for a in raw_authors.split(" and ") if a.strip()]
+                    raw_year = str(entry.get("year", "")).strip()
+                    if raw_year.isdigit():
+                        year = int(raw_year)
+                    doi = str(entry.get("doi", "")).strip().lower() or None
+                    raw_meta["entrytype"] = str(entry.get("ENTRYTYPE", "article"))
+                    if entry.get("journal"):
+                        raw_meta["journal"] = str(entry.get("journal"))
+            except Exception:
+                pass
+
+        if not title and not authors and year is None and not doi:
+            return None
+        return CandidateRecord(
+            title=title,
+            authors=authors,
+            year=year,
+            doi=doi,
+            source="rebuilt_bibtex",
+            raw=raw_meta,
+        )
+
+    def _build_cancelled(self, raw_input: str) -> ResolutionResult:
+        kind = classify_input(normalize_text(raw_input))
+        return ResolutionResult(
+            raw_input=raw_input,
+            input_kind=kind,
+            status=ResultStatus.CANCELLED,
+            message="已取消",
+        )
+
     def _build_failed(
         self,
         raw_input: str,
@@ -343,6 +617,7 @@ class SingleEntryResolver:
             parsed_title=parsed.title,
             parsed_authors=parsed.authors,
             parsed_year=parsed.year,
+            doi=parsed.doi,
             scholar_url=build_scholar_search_url(query),
             message=message,
         )

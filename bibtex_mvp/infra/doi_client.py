@@ -13,15 +13,23 @@ class DoiService:
         self.openalex_client = openalex_client
 
     async def fetch_candidate_by_doi(self, doi: str) -> CandidateRecord | None:
-        crossref_item = await self.crossref_client.fetch_work_by_doi(doi)
+        try:
+            crossref_item = await self.crossref_client.fetch_work_by_doi(doi)
+        except Exception:
+            crossref_item = None
         if crossref_item:
             return map_crossref_item(crossref_item)
 
-        openalex_item = await self.openalex_client.fetch_work_by_doi(doi)
+        try:
+            openalex_item = await self.openalex_client.fetch_work_by_doi(doi)
+        except Exception:
+            openalex_item = None
         if openalex_item:
             return map_openalex_item(openalex_item)
         return None
 
     async def fetch_bibtex_by_doi(self, doi: str) -> str | None:
-        return await self.crossref_client.fetch_bibtex(doi)
-
+        try:
+            return await self.crossref_client.fetch_bibtex(doi)
+        except Exception:
+            return None

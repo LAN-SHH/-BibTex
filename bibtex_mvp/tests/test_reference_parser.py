@@ -27,3 +27,16 @@ def test_parse_reference_vancouver_style_with_trailing_year() -> None:
     assert parsed.year == 2008
     assert parsed.title == "The brain's default network: anatomy, function, and relevance to disease"
     assert parsed.authors[:3] == ["Buckner, R.L.", "Andrews-Hanna, J.R.", "Schacter, D.L."]
+
+
+def test_parse_reference_cn_jol_style() -> None:
+    raw = (
+        "[2] POWER J D, COHEN A L, NELSON S M, 等. "
+        "Functional Network Organization of the Human Brain[J/OL]. "
+        "NEURON, 2011, 72(4): 665-678. DOI:10.1016/j.neuron.2011.09.006."
+    )
+    parsed = parse_reference(raw)
+    assert parsed.title == "Functional Network Organization of the Human Brain"
+    assert parsed.year == 2011
+    assert parsed.doi == "10.1016/j.neuron.2011.09.006"
+    assert parsed.authors[:3] == ["POWER J D", "COHEN A L", "NELSON S M"]

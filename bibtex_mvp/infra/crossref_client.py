@@ -38,31 +38,37 @@ class CrossrefClient:
         if not doi:
             return None
         encoded = quote(doi, safe="")
-        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-            response = await client.get(f"https://api.crossref.org/works/{encoded}")
-            if response.status_code >= 400:
-                return None
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+                response = await client.get(f"https://api.crossref.org/works/{encoded}")
+                if response.status_code >= 400:
+                    return None
+        except httpx.HTTPError:
+            return None
         return (response.json().get("message")) or None
 
     async def fetch_bibtex(self, doi: str) -> str | None:
         if not doi:
             return None
         encoded = quote(doi, safe="")
-        async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
-            response = await client.get(
-                f"https://api.crossref.org/works/{encoded}/transform/application/x-bibtex"
-            )
-            if response.status_code < 400 and response.text.strip().startswith("@"):
-                return response.text.strip()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers) as client:
+                response = await client.get(
+                    f"https://api.crossref.org/works/{encoded}/transform/application/x-bibtex"
+                )
+                if response.status_code < 400 and response.text.strip().startswith("@"):
+                    return response.text.strip()
 
-            fallback = await client.get(
-                f"https://doi.org/{doi}",
-                headers={
-                    **self._headers,
-                    "Accept": "application/x-bibtex",
-                },
-                follow_redirects=True,
-            )
-            if fallback.status_code < 400 and fallback.text.strip().startswith("@"):
-                return fallback.text.strip()
+                fallback = await client.get(
+                    f"https://doi.org/{doi}",
+                    headers={
+                        **self._headers,
+                        "Accept": "application/x-bibtex",
+                    },
+                    follow_redirects=True,
+                )
+                if fallback.status_code < 400 and fallback.text.strip().startswith("@"):
+                    return fallback.text.strip()
+        except httpx.HTTPError:
+            return None
         return None
