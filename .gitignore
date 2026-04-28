@@ -2,4 +2,5 @@
 __pycache__/
 .pytest_cache/
 *.pyc
-
+tools/license_issuer/keys/
+*.private.key

@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import sys
-
-from PySide6.QtWidgets import QApplication
-
-from bibtex_mvp.ui.main_window import MainWindow
+from bibtex_mvp.license_gate.bootstrap import AppBootstrap
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    return app.exec()
+    bootstrap = AppBootstrap()
+    return bootstrap.run()
 
 
 if __name__ == "__main__":
