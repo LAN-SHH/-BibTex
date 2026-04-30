@@ -5,24 +5,21 @@ import re
 from typing import Awaitable, Callable
 
 from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QWheelEvent
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
-    QFrame,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListView,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QPlainTextEdit,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -72,54 +69,10 @@ class AsyncTaskWorker(QObject):
         self.progress.emit(payload)
 
 
-class KeyRuleComboBox(QComboBox):
+class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        view = QListView(self)
-        view.setFrameShape(QFrame.Shape.NoFrame)
-        view.setMouseTracking(True)
-        view.setUniformItemSizes(True)
-        view.setObjectName("KeyRuleComboView")
-        self.setView(view)
-        self.setMaxVisibleItems(6)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        # Avoid accidental key-rule switching when users scroll the page.
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
-        event.ignore()
-
-    def showPopup(self) -> None:  # noqa: N802
-        super().showPopup()
-        popup = self.view().window()
-        if popup is self.window():
-            return
-        popup.setContentsMargins(0, 0, 0, 0)
-        popup.setObjectName("KeyRulePopup")
-        popup.setStyleSheet(
-            """
-            background: #ffffff;
-            border: 1px solid #c7d3e8;
-            border-radius: 8px;
-            """
-        )
-        # Keep popup anchored under the combo box, instead of shifting by selected index.
-        global_pos = self.mapToGlobal(self.rect().bottomLeft())
-        popup.move(global_pos.x(), global_pos.y() + 1)
-
-
-class MainWindow(QMainWindow):
-    def __init__(self, ui_mode: str = "prod") -> None:
-        super().__init__()
-        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
-        self.setWindowFlag(Qt.WindowType.MSWindowsFixedSizeDialogHint, False)
-        self.setMaximumSize(16777215, 16777215)
-        self.setMinimumSize(960, 640)
-        self.ui_mode = ui_mode
-        self.is_test_mode = ui_mode == "test"
-        mode_text = "测试版" if self.is_test_mode else "正式版"
-        self.setWindowTitle(f"参考文献转 BibTeX - {mode_text}")
+        self.setWindowTitle("参考文献转 BibTeX MVP")
         self.resize(1320, 920)
         self.resolver = SingleEntryResolver()
 
@@ -137,34 +90,17 @@ class MainWindow(QMainWindow):
         self._syncing_selection = False
 
         self._build_ui()
-        self._apply_theme()
 
     def _build_ui(self) -> None:
         root = QWidget()
-        root.setObjectName("RootPanel")
         self.setCentralWidget(root)
         root_layout = QVBoxLayout()
         root.setLayout(root_layout)
 
-        header_layout = QHBoxLayout()
-        root_layout.addLayout(header_layout)
-
-        title_label = QLabel("参考文献转 BibTeX")
-        title_label.setObjectName("PageTitle")
-        header_layout.addWidget(title_label)
-
-        mode_badge = QLabel("测试版" if self.is_test_mode else "正式版")
-        mode_badge.setObjectName("ModeBadge")
-        header_layout.addWidget(mode_badge)
-        header_layout.addStretch(1)
-
-        desc_label = QLabel("输入 DOI、文献标题或完整参考文献字符串。支持批量粘贴。")
-        desc_label.setObjectName("PageHint")
-        root_layout.addWidget(desc_label)
+        root_layout.addWidget(QLabel("输入 DOI、文献标题或完整参考文献字符串。支持批量粘贴。"))
         self.input_edit = QPlainTextEdit()
         self.input_edit.setPlaceholderText("支持单条和批量输入")
-        self.input_edit.setMinimumHeight(100)
-        self.input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.input_edit.setFixedHeight(140)
         root_layout.addWidget(self.input_edit)
 
         action_layout = QHBoxLayout()
@@ -176,6 +112,7 @@ class MainWindow(QMainWindow):
 
         self.cancel_btn = QPushButton("取消批量任务")
         self.cancel_btn.clicked.connect(self.on_cancel_batch_clicked)
+        self.cancel_btn.setVisible(False)
         self.cancel_btn.setEnabled(False)
         action_layout.addWidget(self.cancel_btn)
 
@@ -187,7 +124,7 @@ class MainWindow(QMainWindow):
 
         self.confirm_all_btn = QPushButton("确认全部候选")
         self.confirm_all_btn.clicked.connect(self.on_confirm_all_candidates_clicked)
-        self.confirm_all_btn.setVisible(self.is_test_mode)
+        self.confirm_all_btn.setVisible(False)
         self.confirm_all_btn.setEnabled(False)
         action_layout.addWidget(self.confirm_all_btn)
 
@@ -199,7 +136,7 @@ class MainWindow(QMainWindow):
 
         self.scholar_btn = QPushButton("在 Scholar 打开选中文献")
         self.scholar_btn.clicked.connect(self.on_scholar_clicked)
-        self.scholar_btn.setEnabled(True)
+        self.scholar_btn.setEnabled(False)
         action_layout.addWidget(self.scholar_btn)
 
         self.copy_btn = QPushButton("复制当前 BibTeX")
@@ -212,11 +149,7 @@ class MainWindow(QMainWindow):
         self.copy_all_btn.setEnabled(False)
         action_layout.addWidget(self.copy_all_btn)
 
-        self.key_rule_combo = KeyRuleComboBox()
-        self.key_rule_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.key_rule_combo.setMinimumContentsLength(30)
-        self.key_rule_combo.setMinimumWidth(360)
-        self.key_rule_combo.setFixedHeight(32)
+        self.key_rule_combo = QComboBox()
         self.key_rule_combo.addItem("作者姓 + 年份（例：Zhou2007）", BibKeyRule.AUTHOR_YEAR)
         self.key_rule_combo.addItem("作者姓 + 年份 + 标题首词（例：Zhou2007Functional）", BibKeyRule.AUTHOR_YEAR_TITLE)
         self.key_rule_combo.addItem("标题首词 + 年份（例：Functional2007）", BibKeyRule.TITLE_YEAR)
@@ -244,7 +177,7 @@ class MainWindow(QMainWindow):
         success_layout = QVBoxLayout()
         success_group.setLayout(success_layout)
         self.success_table = ResultTable()
-        self.success_table.setMinimumHeight(110)
+        self.success_table.setMinimumHeight(170)
         self.success_table.itemSelectionChanged.connect(lambda: self.on_result_table_selection("success"))
         success_layout.addWidget(self.success_table)
         sections_layout.addWidget(success_group, 1)
@@ -253,7 +186,7 @@ class MainWindow(QMainWindow):
         pending_layout = QVBoxLayout()
         pending_group.setLayout(pending_layout)
         self.pending_table = ResultTable()
-        self.pending_table.setMinimumHeight(110)
+        self.pending_table.setMinimumHeight(170)
         self.pending_table.itemSelectionChanged.connect(lambda: self.on_result_table_selection("pending"))
         pending_layout.addWidget(self.pending_table)
         sections_layout.addWidget(pending_group, 1)
@@ -262,7 +195,7 @@ class MainWindow(QMainWindow):
         failed_layout = QVBoxLayout()
         failed_group.setLayout(failed_layout)
         self.failed_table = ResultTable()
-        self.failed_table.setMinimumHeight(110)
+        self.failed_table.setMinimumHeight(170)
         self.failed_table.itemSelectionChanged.connect(lambda: self.on_result_table_selection("failed"))
         failed_layout.addWidget(self.failed_table)
         sections_layout.addWidget(failed_group, 1)
@@ -271,8 +204,6 @@ class MainWindow(QMainWindow):
         fields_layout = QFormLayout()
         fields_group.setLayout(fields_layout)
         root_layout.addWidget(fields_group)
-        self.detail_group = fields_group
-        self.detail_group.setVisible(self.is_test_mode)
 
         self.raw_input_line = QLineEdit()
         self.raw_input_line.setReadOnly(True)
@@ -302,13 +233,12 @@ class MainWindow(QMainWindow):
         self.bibtex_edit = QPlainTextEdit()
         self.bibtex_edit.setReadOnly(True)
         self.bibtex_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.bibtex_edit.setMinimumHeight(120)
-        self.bibtex_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.bibtex_edit.setFixedHeight(220)
         root_layout.addWidget(self.bibtex_edit)
 
         root_layout.addWidget(QLabel("候选列表"))
         self.candidate_table = CandidateTable()
-        self.candidate_table.setMinimumHeight(120)
+        self.candidate_table.setMinimumHeight(200)
         self.candidate_table.itemSelectionChanged.connect(self.on_candidate_selection_changed)
         self.candidate_table.cellDoubleClicked.connect(self.on_candidate_row_double_clicked)
         root_layout.addWidget(self.candidate_table)
@@ -316,212 +246,6 @@ class MainWindow(QMainWindow):
         self.debug_panel = DebugPanel()
         root_layout.addWidget(self.debug_panel)
         root_layout.setAlignment(self.debug_panel, Qt.AlignmentFlag.AlignLeft)
-        self.debug_panel.setVisible(self.is_test_mode)
-
-    def _apply_theme(self) -> None:
-        self.setStyleSheet(
-            """
-            QWidget#RootPanel {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #f3f7fb, stop:1 #eef3ff);
-            }
-            QLabel {
-                color: #1a2436;
-            }
-            QLabel#PageTitle {
-                font-size: 22px;
-                font-weight: 700;
-                color: #0f1e3a;
-            }
-            QLabel#PageHint {
-                color: #44516b;
-                padding-bottom: 4px;
-            }
-            QLabel#ModeBadge {
-                background: #dce7fb;
-                color: #0f1e3a;
-                border-radius: 10px;
-                padding: 4px 10px;
-                font-weight: 600;
-            }
-            QDialog, QMessageBox {
-                background: #f3f7fb;
-                color: #1a2436;
-            }
-            QDialog QLabel, QMessageBox QLabel {
-                color: #1a2436;
-            }
-            QDialog QPlainTextEdit, QDialog QLineEdit, QDialog QScrollArea {
-                background: #ffffff;
-                color: #111827;
-                border: 1px solid #c7d3e8;
-                border-radius: 8px;
-            }
-            QGroupBox {
-                background: #ffffff;
-                border: 1px solid #dbe4f3;
-                border-radius: 10px;
-                margin-top: 8px;
-                padding-top: 8px;
-                font-weight: 600;
-                color: #132542;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
-            }
-            QPushButton {
-                background: #e6efff;
-                color: #132542;
-                border: none;
-                border-radius: 8px;
-                padding: 6px 12px;
-            }
-            QPushButton:disabled {
-                background: #d6dce8;
-                color: #76839a;
-            }
-            QLineEdit, QPlainTextEdit, QComboBox {
-                background: #ffffff;
-                border: 1px solid #c7d3e8;
-                border-radius: 8px;
-                padding: 4px 6px;
-                color: #111827;
-            }
-            QComboBox {
-                min-height: 30px;
-                padding: 3px 24px 3px 8px;
-            }
-            QComboBox:focus {
-                border: 1px solid #8aa9e6;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 20px;
-                border: none;
-                border-left: none;
-                background: transparent;
-            }
-            QComboBox QAbstractItemView {
-                background: #ffffff;
-                color: #111827;
-                border: none;
-                selection-background-color: #dce9ff;
-                selection-color: #0f1e3a;
-                outline: 0;
-                padding: 3px;
-            }
-            QComboBox QAbstractItemView::item {
-                min-height: 28px;
-                padding: 4px 8px;
-                border-radius: 6px;
-                margin: 1px 0;
-                background: #ffffff;
-                color: #111827;
-            }
-            QComboBox QAbstractItemView::item:hover {
-                background: #dce9ff;
-                color: #0f1e3a;
-            }
-            QComboBox QAbstractItemView::item:selected {
-                background: #c8dcff;
-                color: #0f1e3a;
-            }
-            QTableWidget, QTableView {
-                background: #ffffff;
-                color: #111827;
-                border: 1px solid #c7d3e8;
-                border-radius: 8px;
-                gridline-color: #dbe4f3;
-                selection-background-color: #dce9ff;
-                selection-color: #0f1e3a;
-                alternate-background-color: #f8fbff;
-            }
-            QTableWidget::item, QTableView::item {
-                background: #ffffff;
-                color: #111827;
-            }
-            QHeaderView::section {
-                background: #ffffff;
-                color: #111827;
-                border: 1px solid #dbe4f3;
-                padding: 6px;
-                font-weight: 600;
-            }
-            QHeaderView::section:checked,
-            QHeaderView::section:selected {
-                background: #ffffff;
-                color: #111827;
-            }
-            QTableCornerButton::section {
-                background: #ffffff;
-                border: 1px solid #dbe4f3;
-            }
-            QProgressBar {
-                background: #ffffff;
-                color: #0f1e3a;
-                border: 1px solid #c7d3e8;
-                border-radius: 6px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background: #2057d4;
-                border-radius: 6px;
-            }
-            QScrollBar:vertical {
-                background: transparent;
-                width: 5px;
-                margin: 2px 0 2px 0;
-            }
-            QScrollBar::handle:vertical {
-                background: #c9d7f0;
-                min-height: 26px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #aebfdd;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
-            QScrollBar:horizontal {
-                background: transparent;
-                height: 5px;
-                margin: 0 2px 0 2px;
-            }
-            QScrollBar::handle:horizontal {
-                background: #c9d7f0;
-                min-width: 26px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:horizontal:hover {
-                background: #aebfdd;
-            }
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {
-                width: 0px;
-                background: transparent;
-                border: none;
-            }
-            QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {
-                background: transparent;
-            }
-            QAbstractScrollArea::corner {
-                background: transparent;
-                border: none;
-            }
-            """
-        )
 
     def current_key_rule(self) -> BibKeyRule:
         return self.key_rule_combo.currentData()
@@ -961,7 +685,10 @@ class MainWindow(QMainWindow):
         self.failed_table.setEnabled(True)
         self.candidate_table.setEnabled(True)
 
+        self.cancel_btn.setVisible(is_batch or self.cancel_btn.isVisible())
         self.cancel_btn.setEnabled(is_busy and is_batch)
+        if not is_busy:
+            self.cancel_btn.setVisible(False)
 
         self._update_action_buttons()
 
@@ -1132,16 +859,18 @@ class MainWindow(QMainWindow):
             can_confirm_selected = show_candidate_controls and selected_candidate is not None
 
         # 去重策略：待确认且有候选时，仅展示“打开当前候选”。
-        self.scholar_btn.setEnabled(has_selected_ref)
+        show_general_scholar = has_selected_ref and can_open_scholar and not show_candidate_controls
+        self.scholar_btn.setVisible(show_general_scholar)
+        self.scholar_btn.setEnabled(show_general_scholar)
         self.copy_btn.setEnabled(has_selected_ref and can_copy)
 
-        show_confirm_current = show_candidate_controls and self.candidate_table.selected_candidate() is not None
-        self.confirm_btn.setVisible(show_confirm_current)
-        self.candidate_scholar_btn.setVisible(show_confirm_current)
+        self.confirm_btn.setVisible(show_candidate_controls)
+        self.confirm_all_btn.setVisible(show_candidate_controls)
+        self.candidate_scholar_btn.setVisible(show_candidate_controls)
 
-        self.confirm_btn.setEnabled(show_confirm_current and can_confirm_selected and not self._is_busy)
-        self.confirm_all_btn.setEnabled(show_candidate_controls and can_confirm_all and not self._is_busy)
-        self.candidate_scholar_btn.setEnabled(show_confirm_current)
+        self.confirm_btn.setEnabled(can_confirm_selected and not self._is_busy)
+        self.confirm_all_btn.setEnabled(can_confirm_all and not self._is_busy)
+        self.candidate_scholar_btn.setEnabled(show_candidate_controls and self.candidate_table.selected_candidate() is not None)
 
         success_bibtex = [
             result.bibtex
@@ -1170,31 +899,6 @@ class MainWindow(QMainWindow):
         _, result = selected
         if result.scholar_url:
             QDesktopServices.openUrl(QUrl(result.scholar_url))
-            return
-
-        # For success items or records without prebuilt scholar_url, build a query from current result.
-        title = result.parsed_title or ""
-        authors = result.parsed_authors or []
-        year = result.parsed_year
-        if result.selected is not None:
-            title = result.selected.title or title
-            authors = result.selected.authors or authors
-            year = result.selected.year or year
-
-        parts: list[str] = []
-        if title:
-            parts.append(title)
-        if authors:
-            parts.append(authors[0].split(",", 1)[0].strip())
-        if year:
-            parts.append(str(year))
-        if not parts and result.raw_input:
-            parts.append(result.raw_input)
-        if not parts:
-            return
-
-        url = build_scholar_search_url(" ".join(parts))
-        QDesktopServices.openUrl(QUrl(url))
 
     def on_copy_clicked(self) -> None:
         selected = self._get_selected_result()
