@@ -10,11 +10,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -24,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bibtex_mvp.application.orchestrator import BatchCancelToken
+from bibtex_mvp.application.orchestrator import BatchCancelToken, ResolverConfig
 from bibtex_mvp.application.resolver import SingleEntryResolver
 from bibtex_mvp.domain.batch_splitter import split_batch_input
 from bibtex_mvp.domain.bibtex_builder import build_bibtex_for_candidate
@@ -40,7 +38,6 @@ from bibtex_mvp.domain.models import (
 from bibtex_mvp.infra.scholar_url import build_scholar_search_url
 
 from .batch_split_dialog import AmbiguousSplitDialog, ManualSplitDialog
-from .debug_panel import DebugPanel
 from .widgets import CandidateTable, ResultTable
 
 
@@ -70,11 +67,17 @@ class AsyncTaskWorker(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        auto_accept_threshold: float = 0.92,
+        candidate_floor_threshold: float = 0.80,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("参考文献转 BibTeX MVP")
         self.resize(1320, 920)
         self.resolver = SingleEntryResolver()
+        self.auto_accept_threshold = auto_accept_threshold
+        self.candidate_floor_threshold = candidate_floor_threshold
 
         self.entry_inputs: dict[int, str] = {}
         self.entry_results: dict[int, ResolutionResult | None] = {}
@@ -136,6 +139,7 @@ class MainWindow(QMainWindow):
 
         self.scholar_btn = QPushButton("在 Scholar 打开选中文献")
         self.scholar_btn.clicked.connect(self.on_scholar_clicked)
+        self.scholar_btn.setVisible(False)
         self.scholar_btn.setEnabled(False)
         action_layout.addWidget(self.scholar_btn)
 
@@ -200,35 +204,6 @@ class MainWindow(QMainWindow):
         failed_layout.addWidget(self.failed_table)
         sections_layout.addWidget(failed_group, 1)
 
-        fields_group = QGroupBox("选中条目详情")
-        fields_layout = QFormLayout()
-        fields_group.setLayout(fields_layout)
-        root_layout.addWidget(fields_group)
-
-        self.raw_input_line = QLineEdit()
-        self.raw_input_line.setReadOnly(True)
-        fields_layout.addRow("原始输入", self.raw_input_line)
-
-        self.title_line = QLineEdit()
-        self.title_line.setReadOnly(True)
-        fields_layout.addRow("标题", self.title_line)
-
-        self.authors_line = QLineEdit()
-        self.authors_line.setReadOnly(True)
-        fields_layout.addRow("作者", self.authors_line)
-
-        self.year_line = QLineEdit()
-        self.year_line.setReadOnly(True)
-        fields_layout.addRow("年份", self.year_line)
-
-        self.doi_line = QLineEdit()
-        self.doi_line.setReadOnly(True)
-        fields_layout.addRow("DOI", self.doi_line)
-
-        self.status_line = QLineEdit()
-        self.status_line.setReadOnly(True)
-        fields_layout.addRow("状态", self.status_line)
-
         root_layout.addWidget(QLabel("BibTeX"))
         self.bibtex_edit = QPlainTextEdit()
         self.bibtex_edit.setReadOnly(True)
@@ -243,12 +218,15 @@ class MainWindow(QMainWindow):
         self.candidate_table.cellDoubleClicked.connect(self.on_candidate_row_double_clicked)
         root_layout.addWidget(self.candidate_table)
 
-        self.debug_panel = DebugPanel()
-        root_layout.addWidget(self.debug_panel)
-        root_layout.setAlignment(self.debug_panel, Qt.AlignmentFlag.AlignLeft)
-
     def current_key_rule(self) -> BibKeyRule:
         return self.key_rule_combo.currentData()
+
+    def _resolver_config(self) -> ResolverConfig:
+        return ResolverConfig(
+            auto_accept_threshold=self.auto_accept_threshold,
+            candidate_floor_threshold=self.candidate_floor_threshold,
+            max_rows=20,
+        )
 
     def _normalize_entry(self, value: str) -> str:
         value = (value or "").replace("\u3000", " ").strip()
@@ -256,12 +234,6 @@ class MainWindow(QMainWindow):
         return value
 
     def _clear_result_detail(self) -> None:
-        self.raw_input_line.clear()
-        self.title_line.clear()
-        self.authors_line.clear()
-        self.year_line.clear()
-        self.doi_line.clear()
-        self.status_line.clear()
         self.bibtex_edit.clear()
         self.candidate_table.load_candidates([])
 
@@ -355,7 +327,7 @@ class MainWindow(QMainWindow):
     def _start_single_entry(self, entry: str) -> None:
         self._initialize_entries([entry])
         key_rule = self.current_key_rule()
-        config = self.debug_panel.to_config()
+        config = self._resolver_config()
 
         async def _task(emit_progress: Callable[[object], None]) -> object:
             def _single_progress(message: str, step: int, total: int) -> None:
@@ -406,7 +378,7 @@ class MainWindow(QMainWindow):
     def _start_batch_entries(self, entries: list[str]) -> None:
         self._initialize_entries(entries)
         key_rule = self.current_key_rule()
-        config = self.debug_panel.to_config()
+        config = self._resolver_config()
         self._batch_cancel_token = BatchCancelToken()
 
         async def _task(emit_progress: Callable[[object], None]) -> object:
@@ -677,7 +649,6 @@ class MainWindow(QMainWindow):
         self.input_edit.setReadOnly(is_busy)
         self.resolve_btn.setEnabled(not is_busy)
         self.key_rule_combo.setEnabled(True)
-        self.debug_panel.setEnabled(not is_busy)
 
         # 浏览已完成结果不应被锁死，运行中也允许查看和切换。
         self.pending_table.setEnabled(True)
@@ -817,19 +788,6 @@ class MainWindow(QMainWindow):
             return
 
         _, result = selected
-        self.raw_input_line.setText(result.raw_input)
-
-        selected_candidate = result.selected
-        title = selected_candidate.title if selected_candidate else (result.parsed_title or "")
-        authors = selected_candidate.authors if selected_candidate else result.parsed_authors
-        year = selected_candidate.year if selected_candidate and selected_candidate.year is not None else result.parsed_year
-        doi = selected_candidate.doi if selected_candidate else (result.doi or "")
-
-        self.title_line.setText(title or "")
-        self.authors_line.setText(", ".join(authors) if authors else "")
-        self.year_line.setText(str(year) if year else "")
-        self.doi_line.setText(doi or "")
-        self.status_line.setText(result.status.value)
         self.bibtex_edit.setPlainText(result.bibtex or "")
 
         self.candidate_table.load_candidates(result.candidates)
