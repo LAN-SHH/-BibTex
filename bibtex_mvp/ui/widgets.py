@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
 
 from bibtex_mvp.domain.models import CandidateRecord
+
+
+def _configure_fixed_columns(table: QTableWidget, widths: list[int]) -> None:
+    header = table.horizontalHeader()
+    header.setStretchLastSection(False)
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    for index, width in enumerate(widths):
+        table.setColumnWidth(index, width)
 
 
 class CandidateTable(QTableWidget):
     def __init__(self) -> None:
         super().__init__(0, 6)
         self.setHorizontalHeaderLabels(["分数", "标题", "作者", "年份", "DOI", "来源"])
-        self.horizontalHeader().setStretchLastSection(True)
+        _configure_fixed_columns(self, [80, 420, 220, 80, 170, 120])
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._records: list[CandidateRecord] = []
@@ -24,7 +32,6 @@ class CandidateTable(QTableWidget):
             self.setItem(row, 3, QTableWidgetItem(str(candidate.year or "")))
             self.setItem(row, 4, QTableWidgetItem(candidate.doi or ""))
             self.setItem(row, 5, QTableWidgetItem(candidate.source))
-        self.resizeColumnsToContents()
         if candidates:
             self.selectRow(0)
 
@@ -42,7 +49,7 @@ class ResultTable(QTableWidget):
     def __init__(self) -> None:
         super().__init__(0, 6)
         self.setHorizontalHeaderLabels(["编号", "标题", "作者", "年份", "DOI", "说明"])
-        self.horizontalHeader().setStretchLastSection(True)
+        _configure_fixed_columns(self, [80, 420, 220, 80, 170, 180])
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._indexes: list[int] = []
@@ -57,7 +64,6 @@ class ResultTable(QTableWidget):
             self.setItem(row_index, 3, QTableWidgetItem(str(row.get("year", ""))))
             self.setItem(row_index, 4, QTableWidgetItem(str(row.get("doi", ""))))
             self.setItem(row_index, 5, QTableWidgetItem(str(row.get("message", ""))))
-        self.resizeColumnsToContents()
         self.clearSelection()
 
     def selected_index(self) -> int | None:
