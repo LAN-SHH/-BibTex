@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 from bibtex_mvp.application.orchestrator import BatchCancelToken, ResolverConfig
 from bibtex_mvp.application.resolver import SingleEntryResolver
 from bibtex_mvp.domain.batch_splitter import split_batch_input
-from bibtex_mvp.domain.bibtex_builder import build_bibtex_for_candidate
 from bibtex_mvp.domain.models import (
     BatchProgressEvent,
     BatchProgressStage,
@@ -114,7 +113,6 @@ class MainWindow(QMainWindow):
         self.entry_inputs: dict[int, str] = {}
         self.entry_results: dict[int, ResolutionResult | None] = {}
         self.selected_entry_index: int | None = None
-        self.bulk_confirmed_candidates: dict[int, list[tuple[CandidateRecord, str | None]]] = {}
 
         self._task_thread: QThread | None = None
         self._task_worker: AsyncTaskWorker | None = None
@@ -144,7 +142,7 @@ class MainWindow(QMainWindow):
         header_card = QWidget()
         header_card.setObjectName("HeaderCard")
         header_layout = QHBoxLayout(header_card)
-        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setContentsMargins(14, 10, 14, 10)
         header_layout.setSpacing(10)
 
         header_text_layout = QVBoxLayout()
@@ -168,8 +166,8 @@ class MainWindow(QMainWindow):
         flow_card = QWidget()
         flow_card.setObjectName("FlowCard")
         flow_layout = QHBoxLayout(flow_card)
-        flow_layout.setContentsMargins(14, 10, 14, 10)
-        flow_layout.setSpacing(8)
+        flow_layout.setContentsMargins(12, 6, 12, 6)
+        flow_layout.setSpacing(6)
 
         flow_steps = ["输入参考文献", "自动处理", "查看状态", "人工确认", "导出 BibTeX"]
         for idx, step in enumerate(flow_steps):
@@ -197,6 +195,8 @@ class MainWindow(QMainWindow):
         self.input_edit.setMinimumHeight(120)
         self.input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         input_layout.addWidget(self.input_edit, 1)
+        root_layout.addWidget(input_group)
+
         self.action_bar_widget = QWidget()
         self.action_bar_widget.setObjectName("ActionCard")
         self.action_bar_layout = QGridLayout()
@@ -222,11 +222,6 @@ class MainWindow(QMainWindow):
         self.confirm_btn.setEnabled(False)
         self._action_widgets.append(self.confirm_btn)
 
-        self.confirm_all_btn = QPushButton("确认全部候选")
-        self.confirm_all_btn.clicked.connect(self.on_confirm_all_candidates_clicked)
-        self.confirm_all_btn.setVisible(False)
-        self.confirm_all_btn.setEnabled(False)
-        self._action_widgets.append(self.confirm_all_btn)
 
         self.candidate_scholar_btn = QPushButton("在 Scholar 打开当前候选")
         self.candidate_scholar_btn.clicked.connect(self.on_open_candidate_scholar_clicked)
@@ -265,8 +260,8 @@ class MainWindow(QMainWindow):
         progress_card = QWidget()
         progress_card.setObjectName("ProgressCard")
         progress_layout = QHBoxLayout(progress_card)
-        progress_layout.setContentsMargins(12, 10, 12, 10)
-        progress_layout.setSpacing(10)
+        progress_layout.setContentsMargins(10, 6, 10, 6)
+        progress_layout.setSpacing(8)
 
         self.progress_label = QLabel("就绪")
         self.progress_label.setObjectName("ProgressLabel")
@@ -276,6 +271,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(12)
         progress_layout.addWidget(self.progress_bar, 1)
 
         self.summary_label = QLabel("成功 0 条 | 失败 0 条 | 待确认 0 条")
@@ -380,13 +376,11 @@ class MainWindow(QMainWindow):
         self.content_splitter = content_splitter
         content_splitter.setChildrenCollapsible(False)
         content_splitter.setHandleWidth(8)
-        content_splitter.addWidget(input_group)
         content_splitter.addWidget(result_group)
         content_splitter.addWidget(lower_splitter)
-        content_splitter.setStretchFactor(0, 2)
-        content_splitter.setStretchFactor(1, 3)
-        content_splitter.setStretchFactor(2, 4)
-        content_splitter.setSizes([210, 280, 360])
+        content_splitter.setStretchFactor(0, 5)
+        content_splitter.setStretchFactor(1, 4)
+        content_splitter.setSizes([360, 320])
         root_layout.addWidget(content_splitter, 1)
 
     def _apply_theme(self) -> None:
@@ -424,7 +418,7 @@ class MainWindow(QMainWindow):
                 color: #1b3d77;
                 border: 1px solid #ccdaf2;
                 border-radius: 11px;
-                padding: 3px 10px;
+                padding: 2px 8px;
                 font-weight: 600;
             }
             QLabel#FlowStep {
@@ -432,7 +426,7 @@ class MainWindow(QMainWindow):
                 background: #f6f9ff;
                 border: 1px solid #d7e3f8;
                 border-radius: 8px;
-                padding: 4px 10px;
+                padding: 2px 8px;
                 font-weight: 600;
             }
             QLabel#FlowArrow {
@@ -654,9 +648,9 @@ class MainWindow(QMainWindow):
 
     def _apply_responsive_heights(self) -> None:
         h = max(520, self.height())
-        input_h = max(72, min(140, int(h * 0.10)))
-        result_table_h = max(64, min(140, int(h * 0.09)))
-        detail_table_h = max(92, min(220, int(h * 0.13)))
+        input_h = max(64, min(120, int(h * 0.085)))
+        result_table_h = max(82, min(180, int(h * 0.115)))
+        detail_table_h = max(92, min(210, int(h * 0.12)))
 
         self.input_edit.setMinimumHeight(input_h)
         self.success_table.setMinimumHeight(result_table_h)
@@ -750,7 +744,6 @@ class MainWindow(QMainWindow):
     def _initialize_entries(self, entries: list[str]) -> None:
         self.entry_inputs = {index: value for index, value in enumerate(entries, start=1)}
         self.entry_results = {index: None for index in self.entry_inputs}
-        self.bulk_confirmed_candidates = {}
         self.selected_entry_index = None
         self._clear_result_detail()
         self._refresh_section_tables()
@@ -967,57 +960,6 @@ class MainWindow(QMainWindow):
             is_batch=False,
         )
 
-    def on_confirm_all_candidates_clicked(self) -> None:
-        selected = self._get_selected_result()
-        if not selected:
-            QMessageBox.information(self, "未选中文献", "请先在结果区选择一条文献")
-            return
-
-        entry_index, pending_result = selected
-        if pending_result.status != ResultStatus.PENDING:
-            return
-        if not pending_result.candidates:
-            QMessageBox.information(self, "没有候选", "当前没有可确认的候选结果")
-            return
-
-        key_rule = self.current_key_rule()
-
-        async def _task(emit_progress: Callable[[object], None]) -> object:
-            emit_progress(
-                BatchProgressEvent(
-                    index=entry_index,
-                    total=max(1, len(self.entry_inputs)),
-                    stage=BatchProgressStage.ITEM_START,
-                    message=f"正在确认第 {entry_index} 条全部候选",
-                )
-            )
-            tasks = [
-                self.resolver.finalize_candidate(
-                    pending_result=pending_result,
-                    candidate=candidate,
-                    key_rule=key_rule,
-                )
-                for candidate in pending_result.candidates
-            ]
-            finalized_results = await asyncio.gather(*tasks)
-            emit_progress(
-                BatchProgressEvent(
-                    index=entry_index,
-                    total=max(1, len(self.entry_inputs)),
-                    stage=BatchProgressStage.ITEM_DONE,
-                    message=f"第 {entry_index} 条全部候选确认完成",
-                )
-            )
-            return (entry_index, finalized_results)
-
-        self._run_background_task(
-            task_factory=_task,
-            success_handler=self._on_confirm_all_candidates_success,
-            start_message="正在确认全部候选",
-            error_title="批量确认失败",
-            is_batch=False,
-        )
-
     def _on_confirm_candidate_success(self, payload: object) -> None:
         if not isinstance(payload, tuple) or len(payload) != 2:
             return
@@ -1025,41 +967,6 @@ class MainWindow(QMainWindow):
         if not isinstance(entry_index, int) or not isinstance(result, ResolutionResult):
             return
         self.entry_results[entry_index] = result
-        self.bulk_confirmed_candidates.pop(entry_index, None)
-        self._refresh_section_tables()
-        self._select_index(entry_index)
-
-    def _on_confirm_all_candidates_success(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 2:
-            return
-        entry_index, finalized_results = payload
-        if not isinstance(entry_index, int) or not isinstance(finalized_results, list):
-            return
-
-        pending_result = self.entry_results.get(entry_index)
-        if not isinstance(pending_result, ResolutionResult):
-            return
-
-        confirmed: list[tuple[CandidateRecord, str | None]] = []
-        for result in finalized_results:
-            if not isinstance(result, ResolutionResult):
-                continue
-            if result.selected is None:
-                continue
-            confirmed.append((result.selected, result.bibtex_base))
-
-        if not confirmed:
-            QMessageBox.warning(self, "生成失败", "全部候选都未能生成 BibTeX")
-            return
-
-        self.bulk_confirmed_candidates[entry_index] = confirmed
-        pending_result.status = ResultStatus.SUCCESS
-        pending_result.bibtex = self._build_bulk_bibtex(entry_index, self.current_key_rule())
-        pending_result.selected = None
-        pending_result.doi = None
-        pending_result.message = f"已确认全部候选，共 {len(confirmed)} 条"
-        self.entry_results[entry_index] = pending_result
-
         self._refresh_section_tables()
         self._select_index(entry_index)
 
@@ -1310,15 +1217,12 @@ class MainWindow(QMainWindow):
         can_copy = False
         show_candidate_controls = False
         can_confirm_selected = False
-        can_confirm_all = False
 
         if selected:
             _, result = selected
             can_open_scholar = result.status in {ResultStatus.PENDING, ResultStatus.FAILED} and bool(result.scholar_url)
             can_copy = result.status == ResultStatus.SUCCESS and bool(result.bibtex)
             show_candidate_controls = result.status == ResultStatus.PENDING and len(result.candidates) > 0
-            can_confirm_all = show_candidate_controls
-
             selected_candidate = self.candidate_table.selected_candidate()
             can_confirm_selected = show_candidate_controls and selected_candidate is not None
 
@@ -1330,11 +1234,9 @@ class MainWindow(QMainWindow):
 
         show_confirm_current = show_candidate_controls and self.candidate_table.selected_candidate() is not None
         self.confirm_btn.setVisible(show_confirm_current)
-        self.confirm_all_btn.setVisible(show_candidate_controls)
         self.candidate_scholar_btn.setVisible(show_confirm_current)
 
         self.confirm_btn.setEnabled(show_confirm_current and can_confirm_selected and not self._is_busy)
-        self.confirm_all_btn.setEnabled(show_candidate_controls and can_confirm_all and not self._is_busy)
         self.candidate_scholar_btn.setEnabled(show_confirm_current)
 
         success_bibtex = [
@@ -1425,10 +1327,6 @@ class MainWindow(QMainWindow):
                 continue
             if result.status != ResultStatus.SUCCESS:
                 continue
-            if index in self.bulk_confirmed_candidates:
-                result.bibtex = self._build_bulk_bibtex(index, rule)
-                self.entry_results[index] = result
-                continue
             self.entry_results[index] = self.resolver.rebuild_result_bibtex(result, rule)
 
         self._refresh_section_tables()
@@ -1445,10 +1343,3 @@ class MainWindow(QMainWindow):
         url = build_scholar_search_url(" ".join(query_parts))
         QDesktopServices.openUrl(QUrl(url))
 
-    def _build_bulk_bibtex(self, entry_index: int, key_rule: BibKeyRule) -> str:
-        blocks: list[str] = []
-        for candidate, base_bibtex in self.bulk_confirmed_candidates.get(entry_index, []):
-            bibtex, _ = build_bibtex_for_candidate(candidate, key_rule, base_bibtex)
-            if bibtex.strip():
-                blocks.append(bibtex.strip())
-        return "\n\n".join(blocks)

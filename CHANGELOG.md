@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-01
+### Changed
+- Main UI layout adjusted for responsive resizing behavior
+- Input area kept above action bar
+- Progress bar height reduced for a denser top section
+- Result section height allocation increased
+- Removed "Confirm all candidates" action and related workflow branch
+
+### Fixed
+- Stabilized action bar relayout to avoid hiding the resolve button
+- Improved bottom panel sizing to reduce scrollbar clipping during resize
+
 ## [1.0.1] - 2026-05-01
 ### 修复
 - 删除主界面中的选中条目详情区
