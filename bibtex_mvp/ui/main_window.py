@@ -5,7 +5,7 @@ import re
 from typing import Awaitable, Callable
 
 from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QWheelEvent
+from PySide6.QtGui import QDesktopServices, QFontMetrics, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -124,10 +124,13 @@ class MainWindow(QMainWindow):
         self._batch_cancel_token: BatchCancelToken | None = None
         self._syncing_selection = False
         self._action_widgets: list[QWidget] = []
+        self._last_window_height: int = 0
 
         self._build_ui()
         self._apply_theme()
+        self._apply_min_width_for_candidate_hint()
         self._apply_responsive_heights()
+        self._last_window_height = self.height()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -354,6 +357,7 @@ class MainWindow(QMainWindow):
         candidate_group_layout.setContentsMargins(8, 8, 8, 12)
         candidate_group_layout.setSpacing(6)
         candidate_hint = QLabel("待确认条目会在这里展示候选结果。可查看候选、跳转 Scholar，再决定确认哪一条。")
+        self.candidate_hint_label = candidate_hint
         candidate_hint.setObjectName("SectionHint")
         candidate_hint.setWordWrap(True)
         candidate_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -382,6 +386,7 @@ class MainWindow(QMainWindow):
         content_splitter.setStretchFactor(0, 2)
         content_splitter.setStretchFactor(1, 3)
         content_splitter.setStretchFactor(2, 4)
+        content_splitter.setSizes([210, 280, 360])
         root_layout.addWidget(content_splitter, 1)
 
     def _apply_theme(self) -> None:
@@ -642,7 +647,10 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._relayout_action_bar()
-        self._apply_responsive_heights()
+        current_h = self.height()
+        if current_h != self._last_window_height:
+            self._apply_responsive_heights()
+            self._last_window_height = current_h
 
     def _apply_responsive_heights(self) -> None:
         h = max(520, self.height())
@@ -659,12 +667,20 @@ class MainWindow(QMainWindow):
         self.bib_group.setMinimumHeight(detail_table_h + 36)
         self.candidate_group.setMinimumHeight(detail_table_h + 56)
 
-        if hasattr(self, "content_splitter"):
-            total = max(360, h - 320)
-            input_part = max(110, int(total * 0.24))
-            result_part = max(170, int(total * 0.33))
-            lower_part = max(220, total - input_part - result_part)
-            self.content_splitter.setSizes([input_part, result_part, lower_part])
+        # Keep vertical splitter ratios stable. Horizontal resizing should not
+        # force-reset these sizes, otherwise lower panes get compressed.
+
+    def _apply_min_width_for_candidate_hint(self) -> None:
+        text = self.candidate_hint_label.text()
+        text_width = QFontMetrics(self.candidate_hint_label.font()).horizontalAdvance(text)
+        hint_required_width = text_width + 6
+        self.candidate_hint_label.setMinimumWidth(hint_required_width)
+
+        # Window width budget
+        # left+right root margins(32) + splitter handle(8) + two half panels + safety(24)
+        required_window_width = hint_required_width * 2 + 64
+        required_window_width = max(980, required_window_width)
+        self.setMinimumWidth(required_window_width)
 
     def _relayout_action_bar(self) -> None:
         if not hasattr(self, "action_bar_layout"):
