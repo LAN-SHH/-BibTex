@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from bibtex_mvp.domain.models import CandidateRecord
@@ -24,7 +25,13 @@ def test_scholar_button_is_hidden_on_startup(qapp: QApplication) -> None:
     assert window.scholar_btn.isHidden()
 
 
-def test_selected_entry_detail_widgets_are_removed(qapp: QApplication) -> None:
+def test_resolve_button_is_visible_on_startup(qapp: QApplication) -> None:
+    _ = qapp
+    window = MainWindow()
+    assert not window.resolve_btn.isHidden()
+
+
+def test_selected_entry_detail_widgets_removed(qapp: QApplication) -> None:
     _ = qapp
     window = MainWindow()
     assert not hasattr(window, "raw_input_line")
@@ -82,3 +89,9 @@ def test_candidate_table_header_widths_stay_fixed_after_reload(qapp: QApplicatio
     )
     reloaded_widths = [table.columnWidth(i) for i in range(table.columnCount())]
     assert reloaded_widths == initial_widths
+
+
+def test_candidate_table_horizontal_scrollbar_is_always_on(qapp: QApplication) -> None:
+    _ = qapp
+    table = CandidateTable()
+    assert table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
