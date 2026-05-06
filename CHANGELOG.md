@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-05-06
+### Changed
+- Compressed action bar height and vertical spacing for a denser top section
+- Kept action controls and key-rule selector in one row at cold start
+
 ## [1.1.0] - 2026-05-01
 ### Changed
 - Main UI layout adjusted for responsive resizing behavior
