@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-05-06
+### 修复
+- 优化主界面按钮区布局，减少首屏换行和挤压
+- 优先保证命名规则下拉框宽度，避免按钮区错位
+
 ## [1.1.0] - 2026-05-01
 ### Changed
 - Main UI layout adjusted for responsive resizing behavior
