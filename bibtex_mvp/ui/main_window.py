@@ -693,35 +693,18 @@ class MainWindow(QMainWindow):
         if available_width <= 0:
             available_width = max(640, self.width() - 80)
         spacing = max(0, self.action_bar_layout.horizontalSpacing())
+        self.key_rule_combo.setMaximumWidth(16777215)
+        if self.key_rule_combo in visible_widgets:
+            fixed_required = 0
+            for widget in visible_widgets:
+                if widget is self.key_rule_combo:
+                    continue
+                fixed_required += max(widget.minimumSizeHint().width(), widget.sizeHint().width())
+            combo_budget = max(1, available_width - fixed_required - spacing * (len(visible_widgets) - 1))
+            self.key_rule_combo.setMaximumWidth(combo_budget)
 
-        # Prefer one row. Reflow only when one full row cannot fit.
-        total_required = 0
-        for idx, widget in enumerate(visible_widgets):
-            width = max(widget.minimumSizeHint().width(), widget.sizeHint().width())
-            total_required += width
-            if idx > 0:
-                total_required += spacing
-
-        if total_required <= available_width:
-            for col, widget in enumerate(visible_widgets):
-                self.action_bar_layout.addWidget(widget, 0, col)
-            return
-
-        row = 0
-        col = 0
-        used = 0
-        for widget in visible_widgets:
-            target = max(widget.minimumSizeHint().width(), widget.sizeHint().width())
-            if col > 0 and used + spacing + target > available_width:
-                row += 1
-                col = 0
-                used = 0
-            self.action_bar_layout.addWidget(widget, row, col)
-            if col == 0:
-                used = target
-            else:
-                used += spacing + target
-            col += 1
+        for col, widget in enumerate(visible_widgets):
+            self.action_bar_layout.addWidget(widget, 0, col)
 
     def current_key_rule(self) -> BibKeyRule:
         return self.key_rule_combo.currentData()
