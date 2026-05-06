@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 tools/license_issuer/keys/
 *.private.key
+tmp_ui_preview/
+worktrees/
