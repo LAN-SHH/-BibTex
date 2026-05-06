@@ -200,9 +200,9 @@ class MainWindow(QMainWindow):
         self.action_bar_widget = QWidget()
         self.action_bar_widget.setObjectName("ActionCard")
         self.action_bar_layout = QGridLayout()
-        self.action_bar_layout.setContentsMargins(12, 10, 12, 10)
-        self.action_bar_layout.setHorizontalSpacing(8)
-        self.action_bar_layout.setVerticalSpacing(8)
+        self.action_bar_layout.setContentsMargins(10, 6, 10, 6)
+        self.action_bar_layout.setHorizontalSpacing(6)
+        self.action_bar_layout.setVerticalSpacing(4)
         self.action_bar_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.action_bar_widget.setLayout(self.action_bar_layout)
         root_layout.addWidget(self.action_bar_widget)
@@ -247,9 +247,9 @@ class MainWindow(QMainWindow):
 
         self.key_rule_combo = KeyRuleComboBox()
         self.key_rule_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.key_rule_combo.setMinimumContentsLength(30)
-        self.key_rule_combo.setMinimumWidth(340)
-        self.key_rule_combo.setMinimumHeight(34)
+        self.key_rule_combo.setMinimumContentsLength(24)
+        self.key_rule_combo.setMinimumWidth(280)
+        self.key_rule_combo.setMinimumHeight(30)
         self.key_rule_combo.addItem("作者姓 + 年份，例如 Zhou2007", BibKeyRule.AUTHOR_YEAR)
         self.key_rule_combo.addItem("作者姓 + 年份 + 标题首词，例如 Zhou2007Functional", BibKeyRule.AUTHOR_YEAR_TITLE)
         self.key_rule_combo.addItem("标题首词 + 年份，例如 Functional2007", BibKeyRule.TITLE_YEAR)
@@ -477,7 +477,8 @@ class MainWindow(QMainWindow):
                 color: #142847;
                 border: 1px solid #cfddf4;
                 border-radius: 8px;
-                padding: 7px 12px;
+                min-height: 28px;
+                padding: 5px 10px;
                 font-weight: 500;
             }
             QPushButton:hover {
@@ -505,8 +506,8 @@ class MainWindow(QMainWindow):
                 border: 1px solid #8aa9e6;
             }
             QComboBox {
-                min-height: 32px;
-                padding: 4px 24px 4px 8px;
+                min-height: 28px;
+                padding: 3px 22px 3px 8px;
                 combobox-popup: 0;
             }
             QComboBox::drop-down {
