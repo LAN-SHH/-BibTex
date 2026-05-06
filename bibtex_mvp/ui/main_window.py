@@ -646,6 +646,12 @@ class MainWindow(QMainWindow):
             self._apply_responsive_heights()
             self._last_window_height = current_h
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # First layout pass can use a narrow placeholder width before the
+        # window is shown. Re-layout once with real geometry.
+        self._relayout_action_bar()
+
     def _apply_responsive_heights(self) -> None:
         h = max(520, self.height())
         input_h = max(64, min(120, int(h * 0.085)))
