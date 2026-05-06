@@ -4,7 +4,7 @@ import asyncio
 import re
 from typing import Awaitable, Callable
 
-from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QSize, QThread, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QFontMetrics, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QSizePolicy,
     QSplitter,
+    QStyle,
+    QStyleOptionComboBox,
     QVBoxLayout,
     QWidget,
 )
@@ -693,41 +695,80 @@ class MainWindow(QMainWindow):
         self.action_bar_widget.setVisible(True)
         if not visible_widgets:
             visible_widgets = [self.resolve_btn, self.cancel_btn, self.copy_btn, self.copy_all_btn, self.key_rule_combo]
+        elif self.key_rule_combo in visible_widgets:
+            # Keep key-rule combo as the last widget in the row.
+            visible_widgets = [w for w in visible_widgets if w is not self.key_rule_combo] + [self.key_rule_combo]
 
         available_width = self.action_bar_widget.contentsRect().width()
         if available_width <= 0:
             available_width = max(640, self.width() - 80)
         spacing = max(0, self.action_bar_layout.horizontalSpacing())
 
-        # Prefer one row. Reflow only when one full row cannot fit.
-        total_required = 0
-        for idx, widget in enumerate(visible_widgets):
-            width = max(widget.minimumSizeHint().width(), widget.sizeHint().width())
-            total_required += width
-            if idx > 0:
-                total_required += spacing
+        combo = self.key_rule_combo
+        fixed_widgets = [w for w in visible_widgets if w is not combo]
+        fixed_buttons_width = 0
+        for widget in fixed_widgets:
+            if isinstance(widget, QPushButton):
+                widget.setMinimumWidth(0)
+                widget.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            fixed_buttons_width += max(widget.minimumSizeHint().width(), widget.minimumWidth())
 
-        if total_required <= available_width:
-            for col, widget in enumerate(visible_widgets):
-                self.action_bar_layout.addWidget(widget, 0, col)
-            return
+        gap_width = spacing * max(0, len(visible_widgets) - 1)
+        combo_needed_width = self._combo_needed_width()
+        combo_assigned_width = available_width - fixed_buttons_width - gap_width
 
-        row = 0
-        col = 0
-        used = 0
-        for widget in visible_widgets:
-            target = max(widget.minimumSizeHint().width(), widget.sizeHint().width())
-            if col > 0 and used + spacing + target > available_width:
-                row += 1
-                col = 0
-                used = 0
-            self.action_bar_layout.addWidget(widget, row, col)
-            if col == 0:
-                used = target
-            else:
-                used += spacing + target
-            col += 1
+        # Keep one-row layout. Buttons shrink first. Only truncate combo when
+        # there is no physical room for full text.
+        if combo_assigned_width >= combo_needed_width:
+            combo.setMinimumWidth(combo_needed_width)
+            combo.setMaximumWidth(16777215)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            combo_log_width = combo_needed_width
+        else:
+            combo_log_width = max(140, combo_assigned_width)
+            combo.setFixedWidth(combo_log_width)
+            combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
+        for col, widget in enumerate(visible_widgets):
+            self.action_bar_layout.addWidget(widget, 0, col)
+            self.action_bar_layout.setColumnStretch(col, 0)
+        self.action_bar_layout.setColumnStretch(len(visible_widgets) - 1, 1)
+
+        print(
+            f"[key-rule-layout] available_width={available_width} "
+            f"fixed_buttons_width={fixed_buttons_width} "
+            f"combo_assigned_width={combo_log_width} "
+            f"combo_needed_width={combo_needed_width}"
+        )
+
+    def _sync_key_rule_combo_width(self) -> None:
+        self.key_rule_combo.setMinimumWidth(self._combo_needed_width())
+
+    def _combo_text_needed_width(self, text: str) -> int:
+        combo = self.key_rule_combo
+        content = (text or "").strip()
+        if not content:
+            return 320
+        option = QStyleOptionComboBox()
+        option.initFrom(combo)
+        option.currentText = content
+        option.editable = combo.isEditable()
+        option.iconSize = combo.iconSize()
+        text_width = QFontMetrics(combo.font()).horizontalAdvance(content)
+        base = QSize(max(1, text_width), max(1, combo.sizeHint().height()))
+        style = combo.style()
+        needed = style.sizeFromContents(QStyle.ContentsType.CT_ComboBox, option, base, combo).width()
+        return max(320, needed + 10)
+
+    def _combo_needed_width(self) -> int:
+        combo = self.key_rule_combo
+        longest = ""
+        for index in range(combo.count()):
+            text = combo.itemText(index)
+            if len(text) > len(longest):
+                longest = text
+        current = combo.currentText()
+        return max(self._combo_text_needed_width(longest), self._combo_text_needed_width(current))
     def current_key_rule(self) -> BibKeyRule:
         return self.key_rule_combo.currentData()
 
